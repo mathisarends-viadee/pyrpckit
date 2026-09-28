@@ -567,7 +567,7 @@ class RpcService:
 
 
 def endpoint_rejections(
-    endpoint: RpcEndpoint | RpcStreamEndpoint,
+    endpoint: RpcEndpoint[Any] | RpcStreamEndpoint[Any],
 ) -> RpcRejections | None:
     """The endpoint's ``raises=``, falling back to the service's."""
     return chain_rejections(

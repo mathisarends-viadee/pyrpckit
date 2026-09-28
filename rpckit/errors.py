@@ -47,6 +47,7 @@ class RpcInvalidParams(RpcModel):
 class RpcError(Exception):
     code: ClassVar[str]
     message: ClassVar[str]
+    details: Any
     rpc_code: ClassVar[int] = RpcErrorCode.SERVER_ERROR
     details_type: ClassVar[type[BaseModel] | None] = None
     _builtin: ClassVar[bool] = False
@@ -251,8 +252,8 @@ class RpcErrorContract[ExceptionT: Exception]:
         }
         if isinstance(message, str):
             namespace["message"] = message
-        self.exception = exception
-        self.rejection = rejection
+        self.exception: type[ExceptionT] = exception
+        self.rejection: RpcRejection | None = rejection
         self.error: type[RpcError] = type(name, (RpcError,), namespace)
         self._message = message
         self._details = details
