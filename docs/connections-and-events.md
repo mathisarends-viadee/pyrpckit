@@ -53,17 +53,39 @@ responses are not sent.
 
 ## Map failures to rejections
 
-`rejections=` turns domain failures into connection-level refusals. It takes a
-mapping from exception types to `RpcRejection` values, using the exception text
-as reason, or a callable that returns an `RpcReject` or `None`:
+A failure can end a connection instead of a call: a `before_accept` hook or a
+context function refuses it, an event source or binary stream breaks. Declare
+the [error contracts](errors.md#bind-domain-exceptions) of such failures in
+`raises=`, on `RpcService` for failures every endpoint shares and on
+`socket()` or `stream()` for one endpoint's failures. Each contract names the
+`RpcRejection` its exception becomes:
+
+```python
+from rpckit import RpcErrorContract, RpcRejection
+
+session_expired = RpcErrorContract(SessionExpired, rejection=RpcRejection.UNAUTHORIZED)
+session_not_found = RpcErrorContract(SessionNotFound, rejection=RpcRejection.NOT_FOUND)
+
+app = RpcService(raises=[session_expired])
+app.socket(
+    "/sessions/{session_id}/events",
+    channels=(session_events,),
+    raises=[session_not_found],
+)
+```
+
+The contract's message becomes the rejection reason, so a denied handshake
+answers 404 with `Session not found` rather than the exception text. The same
+contract can also appear in a method's `raises=`, where it answers calls with
+the `session_not_found` error.
+
+`serve()`, `create_router()`, `serve_websocket()`, `RpcRoutes`, and
+`RpcTestClient` accept `rejections=` for call-specific policies: a mapping from
+exception types to `RpcRejection` values, using the exception text as reason,
+or a callable that returns an `RpcReject` or `None`:
 
 ```python
 from rpckit import RpcReject, RpcRejection
-
-rejections = {
-    TaskNotFound: RpcRejection.NOT_FOUND,
-    TaskAccessDenied: RpcRejection.FORBIDDEN,
-}
 
 
 def reject(error: Exception) -> RpcReject | None:
@@ -72,28 +94,10 @@ def reject(error: Exception) -> RpcReject | None:
     return None
 ```
 
-Declare it where the failures belong: on `RpcService` for failures every
-endpoint shares, on `socket()` or `stream()` for one endpoint's failures:
-
-```python
-app = RpcService(
-    rejections={
-        SessionExpired: RpcRejection.UNAUTHORIZED,
-        BackendUnavailable: RpcRejection.UNAVAILABLE,
-    },
-)
-app.socket(
-    "/sessions/{session_id}/events",
-    channels=(session_events,),
-    rejections={SessionNotFound: RpcRejection.NOT_FOUND},
-)
-```
-
-`serve()`, `create_router()`, `serve_websocket()`, `RpcRoutes`, and
-`RpcTestClient` accept `rejections=` as well. A failure is looked up in the
-call's policy first, then the endpoint's, then the service's; the first one
-that maps it wins, and a callable returning `None` passes it on. More specific
-levels therefore add or override mappings without repeating the others.
+A failure is looked up in the call's policy first, then the endpoint's
+`raises=`, then the service's; the first one that maps it wins, and a callable
+returning `None` passes it on. More specific levels therefore add or override
+mappings without repeating the others.
 
 The connection state decides what a rejection becomes:
 

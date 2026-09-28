@@ -4,17 +4,22 @@
 
 ### Migration from 0.9
 
-- No public API was removed or renamed. Regenerate committed Python and
-  TypeScript clients so `rpckit generate --check` passes; only the generator
-  version in `.rpcgen/manifest.json` changes.
+- No public API was removed or renamed; `RpcService(errors=...)` is
+  deprecated. Regenerate committed Python and TypeScript clients so
+  `rpckit generate --check` passes; only the generator version in
+  `.rpcgen/manifest.json` changes.
 - Normal and shutdown closes now wait until queued messages are sent, bounded by
   `RpcLimits.send_timeout`. Remove workarounds that tracked socket sends before
   calling `connection.close()`, and use `close_when_events_complete=True` for
   sockets that should end with their event sources.
+- Replace `RpcService(errors={TaskNotFound: TaskNotFoundRpcError})` with an
+  `RpcErrorContract(TaskNotFound, ...)` declared in the methods' `raises=`.
+  The deprecated mapping keeps working and emits a `DeprecationWarning`.
 - `rejections=` passed to `serve()`, `create_router()`, `serve_websocket()`,
   `RpcRoutes`, or `RpcTestClient` keeps working and is consulted first. Move
-  mappings repeated at several call sites to `RpcService(rejections=...)` or to
-  the endpoint's `socket()` or `stream()`.
+  mappings repeated at several call sites to contracts in
+  `RpcService(raises=...)` or in the endpoint's `socket(raises=...)` or
+  `stream(raises=...)`.
 - Child channels that only hold a single operation can become a dotted name on
   the parent channel, for example `@channel.server.method("text.insert")`. The
   wire name stays the same.
@@ -26,18 +31,33 @@
   source of the socket has finished, the queued notifications are sent and the
   connection closes with `NORMAL`. Sockets whose channels declare no events
   reject the option.
-- Declare connection rejection policies next to the endpoints with
-  `RpcService(rejections=...)`, `RpcService.socket(..., rejections=...)`, and
-  `RpcService.stream(..., rejections=...)`. A failure is looked up in the
-  call's `rejections=` first (`serve()`, `create_router()`,
-  `serve_websocket()`, `RpcRoutes`, `RpcTestClient`), then the endpoint's,
-  then the service's; the first level that maps it wins.
+- Bind domain exceptions to RPC errors with `RpcErrorContract`, so domain code
+  no longer imports rpckit. A contract sets the same `code`, `message`,
+  `rpc_code`, and `details` as an `RpcError` subclass, reads dynamic messages
+  and details from the exception, and may name the `RpcRejection` the
+  exception becomes when it ends a connection. Declare it in `raises=` of
+  methods and channels, where it answers calls and appears in OpenRPC and
+  generated clients like an `RpcError` subclass. An exception binds to one
+  contract per service; the most specific contract matches subclasses. Export
+  `RpcErrorContract` and `RpcErrorDeclaration`.
+- Declare connection failures next to the endpoints with contracts in
+  `RpcService(raises=...)`, `RpcService.socket(..., raises=...)`,
+  `RpcService.stream(..., raises=...)`, and `RpcRoutes(..., raises=...)`.
+  The contract's message becomes the rejection reason. A failure is looked up
+  in the call's `rejections=` first (`serve()`, `create_router()`,
+  `serve_websocket()`, `RpcRoutes`, `RpcTestClient`), then the endpoint's
+  `raises=`, then the service's; the first level that maps it wins.
 - Pass dotted names to `method()`, `event()`, `subscription()`, `stream()`,
   `client.method()`, and `child()`. Names are relative to the channel
   namespace and each segment is validated, so
   `@channel.server.method("text.insert")` no longer needs a child channel.
   Wire names, contracts, and generated clients match the child-channel
   equivalent.
+
+### Deprecated
+
+- `RpcService(errors=...)` and `RpcChannel.create_server(errors=...)`; declare
+  `RpcErrorContract` values in `raises=` instead.
 
 ### Fixed
 

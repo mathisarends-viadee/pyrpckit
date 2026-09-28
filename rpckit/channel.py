@@ -15,7 +15,14 @@ from rpckit.dependencies import (
     call_scope,
     resolver_with_context,
 )
-from rpckit.errors import ProtocolDefinitionError, RpcError, declared_error
+from rpckit.errors import (
+    ProtocolDefinitionError,
+    RpcError,
+    RpcErrorContract,
+    RpcErrorDeclaration,
+    declared_error,
+    warn_errors_mapping,
+)
 from rpckit.observer import RpcObserverLike
 from rpckit.protocol import (
     RpcClientMethod,
@@ -52,7 +59,7 @@ class RpcChannel:
         /,
         *,
         namespace: str | None = None,
-        raises: Iterable[type[RpcError]] = (),
+        raises: Iterable[RpcErrorDeclaration] = (),
         resolver_scope: RpcResolverScope = call_scope,
     ) -> None:
         if name is None and namespace is None:
@@ -142,7 +149,7 @@ class RpcChannel:
         name: str,
         /,
         *,
-        raises: Iterable[type[RpcError]] = (),
+        raises: Iterable[RpcErrorDeclaration] = (),
         resolver_scope: RpcResolverScope | None = None,
     ) -> "RpcChannel":
         self._ensure_mutable()
@@ -222,6 +229,8 @@ class RpcChannel:
         errors: Mapping[type[Exception], type[RpcError]] | None = None,
         strict_errors: bool = False,
     ) -> RpcServer:
+        if errors is not None:
+            warn_errors_mapping()
         return RpcServer._from_channel(
             self.protocol,
             resolver=resolver_with_context(resolver, context),
@@ -271,7 +280,7 @@ class RpcServerSide:
         /,
         *,
         summary: str | None = None,
-        raises: Iterable[type[RpcError]] = (),
+        raises: Iterable[RpcErrorDeclaration] = (),
     ) -> Callable[[FunctionType], FunctionType]: ...
 
     def method(
@@ -280,7 +289,7 @@ class RpcServerSide:
         /,
         *,
         summary: str | None = None,
-        raises: Iterable[type[RpcError]] = (),
+        raises: Iterable[RpcErrorDeclaration] = (),
     ) -> Any:
         channel = self._channel
         channel._ensure_mutable()
@@ -487,6 +496,12 @@ class RpcClientSide:
         channel = self._channel
         channel._ensure_mutable()
         wire_name = join_rpc_name(channel.namespace, _name(name, "client method name"))
+        raises = tuple(raises)
+        if any(isinstance(error, RpcErrorContract) for error in raises):
+            raise ProtocolDefinitionError(
+                "Client methods declare RpcError subclasses: the server receives "
+                "these errors and cannot rebuild a domain exception from them"
+            )
         definition = client_method_definition(
             name=wire_name,
             params=params,

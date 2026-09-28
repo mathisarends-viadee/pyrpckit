@@ -98,7 +98,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
-from rpckit import RpcRejection
 from rpckit.fastapi import RpcRoutes
 
 
@@ -114,10 +113,7 @@ router = APIRouter(prefix="/jobs")
 job_routes = RpcRoutes(
     router,
     context=open_job,
-    rejections={
-        JobNotFound: RpcRejection.NOT_FOUND,
-        JobAccessDenied: RpcRejection.FORBIDDEN,
-    },
+    raises=[job_not_found, job_access_denied],
 )
 job_routes.mount(job_events)
 job_routes.mount(job_output)
@@ -141,10 +137,11 @@ To integrate a DI library, pass an object implementing `FastApiResolver`
 instead: it creates a resolver per WebSocket and may wrap the context function.
 `rpckit.dishka.Dishka` is one such [integration](dependencies.md#dishka).
 
-`rejections=` follows
-[the core rules](connections-and-events.md#map-failures-to-rejections), is
-consulted before the policies of the mounted endpoint and its service, and
-also covers the context function and its dependencies: before acceptance the
+`raises=` takes [error contracts](errors.md#bind-domain-exceptions) with a
+`rejection=`, and `rejections=` takes a mapping or callable. Both follow
+[the core rules](connections-and-events.md#map-failures-to-rejections), are
+consulted before the `raises=` of the mounted endpoint and its service, and
+also cover the context function and its dependencies: before acceptance the
 handshake is rejected with an HTTP denial response, after acceptance the
 socket closes with the matching code. Unmapped failures propagate unchanged.
 Dependencies passed to `APIRouter(dependencies=...)` run before this check, so

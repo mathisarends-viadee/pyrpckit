@@ -55,26 +55,78 @@ Errors may be declared for every method in a channel:
 tasks = RpcChannel("tasks", raises=(PermissionDeniedError,))
 ```
 
-Method-level declarations are added to the channel-level set.
-
-Map domain exceptions at service construction when an RPC error needs no
-details model:
-
-```python
-service = RpcService(
-    errors={TaskNotFound: TaskNotFoundRpcError},
-    strict_errors=True,
-)
-```
-
-The original exception text becomes the RPC error message. `error_mapper`
-remains a fallback for mappings that need custom details. With
-`strict_errors=True`, an application error absent from the method's `raises=`
-declaration becomes an internal error and is logged.
+Method-level declarations are added to the channel-level set. With
+`RpcService(strict_errors=True)`, an application error absent from the
+method's `raises=` declaration becomes an internal error and is logged.
 
 Clients should identify application errors by `error.data.code`. The numeric
 `error.code` is optional for application-specific identity; distinct errors may
 share it. The service warns when explicitly assigned numeric codes collide.
+
+## Bind domain exceptions
+
+Domain code should not have to import rpckit. An `RpcErrorContract` binds an
+exception it raises to the RPC error that answers it, so the exception stays
+free of transport concerns:
+
+```python
+# tasks/exceptions.py
+class TaskNotFound(Exception):
+    def __init__(self, task_id: int) -> None:
+        self.task_id = task_id
+```
+
+```python
+# tasks/rpc_errors.py
+from rpckit import RpcErrorContract, RpcModel, RpcRejection
+
+
+class TaskRef(RpcModel):
+    task_id: int
+
+
+task_not_found = RpcErrorContract(
+    TaskNotFound,
+    message="Task not found",
+    details=TaskRef,
+    rejection=RpcRejection.NOT_FOUND,
+)
+```
+
+Declare the contract in `raises=` like an `RpcError` subclass. A method that
+lets `TaskNotFound` escape answers with the `task_not_found` error:
+
+```python
+@tasks.server.method(raises=[task_not_found])
+async def get(params: GetTask, repository: Inject[TaskRepository]) -> Task:
+    return await repository.get(params.task_id)
+```
+
+The contract accepts the same settings as an `RpcError` subclass, with the same
+defaults: `code` is derived from the exception name (`TaskNotFound` becomes
+`task_not_found`), `message` from that code, and `rpc_code` defaults to
+`-32000`. The dynamic parts are read from the exception:
+
+- `details=` takes a Pydantic model filled from the exception's attributes, or
+  a function annotated to return one, such as
+  `def lock_details(error: TaskLocked) -> LockDetails`.
+- `message=` takes a string or a function of the exception. `message=str`
+  passes the exception text; do that only when the text is written for
+  clients.
+- `rejection=` is the `RpcRejection` the failure becomes when it ends a
+  connection instead of a call. See
+  [Map failures to rejections](connections-and-events.md#map-failures-to-rejections).
+
+The contract matches subclasses of its exception, and the most specific
+contract wins. OpenRPC documents and generated clients describe a contract
+exactly like an `RpcError` subclass with the same settings. An exception binds
+to one contract per service. Client methods keep declaring `RpcError`
+subclasses, because the server receives these errors and cannot rebuild a
+domain exception from them.
+
+`RpcService(errors={TaskNotFound: TaskNotFoundRpcError})` is deprecated in
+favor of contracts. `error_mapper` remains available for failures that need
+code to decide.
 
 ## Unexpected exceptions
 

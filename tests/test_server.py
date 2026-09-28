@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+import pytest
 from pydantic import BaseModel
 
 from rpckit import (
@@ -312,7 +313,8 @@ async def test_declarative_error_mapping_and_strict_errors() -> None:
     async def undeclared() -> None:
         raise DomainMissing("gone")
 
-    service = RpcService(errors={DomainMissing: MissingError}, strict_errors=True)
+    with pytest.warns(DeprecationWarning):
+        service = RpcService(errors={DomainMissing: MissingError}, strict_errors=True)
     endpoint = service.socket("/mapped", channels=(channel,))
     server = endpoint.create_server()
     declared_response = await server.handle(

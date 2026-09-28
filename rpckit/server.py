@@ -14,6 +14,9 @@ from rpckit.errors import (
     RpcInternalError,
     RpcInvalidRequestError,
     RpcParseError,
+    bind_contracts,
+    contract_for,
+    contract_of,
 )
 from rpckit.observer import (
     RpcObserverLike,
@@ -58,6 +61,14 @@ class RpcServer:
         server._codec = RpcCodec()
         server._limits = limits or RpcLimits()
         server._semaphore = asyncio.Semaphore(server._limits.max_concurrency)
+        server._contracts = bind_contracts(
+            dict.fromkeys(
+                contract
+                for method in protocol.methods
+                for error in method.raises
+                if (contract := contract_of(error)) is not None
+            )
+        )
         server._errors = dict(errors or {})
         server._strict_errors = strict_errors
         return server
@@ -163,6 +174,14 @@ class RpcServer:
     ) -> RpcError:
         if isinstance(error, RpcError):
             mapped = error
+        elif (contract := contract_for(error, self._contracts)) is not None:
+            try:
+                mapped = contract.to_error(error)
+            except Exception:
+                logger.exception(
+                    "RPC error contract %s failed for method %s", contract.code, method
+                )
+                return RpcInternalError()
         else:
             mapped = next(
                 (
