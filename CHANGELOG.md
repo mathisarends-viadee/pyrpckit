@@ -2,6 +2,23 @@
 
 ## 0.10.0 - Unreleased
 
+### Migration from 0.9
+
+- No public API was removed or renamed. Regenerate committed Python and
+  TypeScript clients so `rpckit generate --check` passes; only the generator
+  version in `.rpcgen/manifest.json` changes.
+- Normal and shutdown closes now wait until queued messages are sent, bounded by
+  `RpcLimits.send_timeout`. Remove workarounds that tracked socket sends before
+  calling `connection.close()`, and use `close_when_events_complete=True` for
+  sockets that should end with their event sources.
+- `rejections=` passed to `serve()`, `create_router()`, `serve_websocket()`,
+  `RpcRoutes`, or `RpcTestClient` keeps working and is consulted first. Move
+  mappings repeated at several call sites to `RpcService(rejections=...)` or to
+  the endpoint's `socket()` or `stream()`.
+- Child channels that only hold a single operation can become a dotted name on
+  the parent channel, for example `@channel.server.method("text.insert")`. The
+  wire name stays the same.
+
 ### Added
 
 - Close finite event sockets with
@@ -28,8 +45,10 @@
   message being sent when the close arrives. Closes wait until the queued
   messages are sent, within `RpcLimits.send_timeout` in total, so an event
   source can close right after its final `yield`.
+- Cancelling a served JSON-RPC connection also cancels its reader, writer,
+  event sources, and pending requests instead of leaving them running.
 
-## 0.9.0 - Unreleased
+## 0.9.0 - 2026-09-25
 
 ### Added
 
@@ -59,7 +78,7 @@
 - Add `RpcConnectionClose.TRY_AGAIN_LATER` (WebSocket code 1013), used when an
   accepted connection is closed with `RpcRejection.UNAVAILABLE`.
 
-## 0.8.0 - Unreleased
+## 0.8.0 - 2026-09-24
 
 ### Migration from 0.7
 
@@ -172,7 +191,7 @@
   a connection uses the same client/server vocabulary as client methods. The
   module `rpckit.peer` is now `rpckit.connected_client`.
 
-## 0.7.0 - Unreleased
+## 0.7.0 - 2026-09-19
 
 ### Migration from 0.6
 
