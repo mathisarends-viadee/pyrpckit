@@ -43,6 +43,7 @@ class RpcEndpoint[ContextT]:
     before_accept: RpcBeforeAccept | None = None
     path_model: type[BaseModel] | None = None
     context: type[ContextT] | None = None
+    close_when_events_complete: bool = False
     _protocol: RpcProtocol | None = field(default=None, init=False, repr=False)
 
     @property
@@ -242,6 +243,7 @@ class RpcService:
         before_accept: RpcBeforeAccept | None = None,
         path_model: type[BaseModel] | None = None,
         context: type[ContextT] = NoneType,
+        close_when_events_complete: bool = False,
     ) -> RpcEndpoint[ContextT]:
         self._ensure_mutable()
         variables = _validate_endpoint(self._endpoints, path, name, subprotocol)
@@ -286,6 +288,7 @@ class RpcService:
             before_accept,
             path_model,
             None if context is NoneType else context,
+            close_when_events_complete,
         )
         self._endpoints.append(endpoint)
         self._channels.update(channels)
@@ -378,6 +381,13 @@ class RpcService:
         errors: dict[str, type] = {}
         for endpoint in self.endpoints:
             if isinstance(endpoint, RpcEndpoint):
+                if endpoint.close_when_events_complete and not any(
+                    channel.freeze().notifications for channel in endpoint.channels
+                ):
+                    raise ProtocolDefinitionError(
+                        f"RPC socket {endpoint.name!r} sets close_when_events_complete "
+                        "but its channels declare no events"
+                    )
                 for channel in endpoint.channels:
                     protocol = channel.freeze()
                     methods.extend(

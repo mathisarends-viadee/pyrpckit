@@ -46,6 +46,11 @@ async def sign_out(connection: Inject[RpcConnection]) -> None:
     await connection.close(RpcConnectionClose.NORMAL, reason="Signed out")
 ```
 
+A `NORMAL` or `SHUTDOWN` close first sends the responses and notifications
+already queued for the connection, within `RpcLimits.send_timeout` in total.
+Other close codes close at once. Requests still running are cancelled, so their
+responses are not sent.
+
 ## Map failures to rejections
 
 `rejections=` turns domain failures into connection-level refusals. It takes a
@@ -112,6 +117,34 @@ and fails at definition time when it differs from the yielded type.
 
 Events expect no answer. When the server needs the client's result, declare a
 [client method](client-methods.md) instead.
+
+### Finite event sockets
+
+By default a socket stays open after its event sources finish. For a socket
+that only reports a finite job, let the endpoint close it:
+
+```python
+@exports.server.event()
+async def progress(job: Inject[ExportJob]) -> AsyncIterator[ExportProgress]:
+    async for percent in job.run():
+        yield ExportProgress(percent=percent)
+    yield ExportProgress(percent=100, done=True)
+
+
+app.socket(
+    "/exports/{job_id}",
+    channels=(exports,),
+    close_when_events_complete=True,
+)
+```
+
+Once every event source of the socket has finished, the queued notifications
+are sent and the connection closes with `NORMAL`. A failing source closes it as
+described in [Map failures to rejections](#map-failures-to-rejections). The
+service rejects the option on a socket whose channels declare no events.
+
+An event source can also close earlier with `await connection.close()`; the
+notifications it yielded before are still delivered.
 
 ## Subscriptions with parameters
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.10.0 - Unreleased
+
+### Added
+
+- Close finite event sockets with
+  `RpcService.socket(..., close_when_events_complete=True)`. Once every event
+  source of the socket has finished, the queued notifications are sent and the
+  connection closes with `NORMAL`. Sockets whose channels declare no events
+  reject the option.
+
+### Fixed
+
+- `RpcConnection.close()` with `NORMAL` or `SHUTDOWN` no longer drops the
+  message being sent when the close arrives. Closes wait until the queued
+  messages are sent, within `RpcLimits.send_timeout` in total, so an event
+  source can close right after its final `yield`.
+
 ## 0.9.0 - Unreleased
 
 ### Added

@@ -443,3 +443,55 @@ async def test_cancelling_a_connection_closes_it_as_shutdown() -> None:
         await task
 
     assert socket.closed == (RpcConnectionClose.SHUTDOWN, "")
+
+
+class DelayedSocket(InMemorySocket):
+    async def send(self, message: str) -> None:
+        await asyncio.sleep(0.01)
+        await super().send(message)
+
+
+async def test_closing_after_the_final_event_delivers_queued_notifications() -> None:
+    events = RpcChannel("events")
+
+    @events.server.event(payload=Params)
+    async def finished(
+        connection: Inject[RpcConnection],
+    ) -> AsyncIterator[Params]:
+        yield Params(value="last")
+        await connection.close()
+
+    rpc = RpcService()
+    rpc.socket("/events", channels=(events,))
+    socket = DelayedSocket("/events")
+
+    await asyncio.wait_for(rpc.serve(socket), 1)
+
+    assert json.loads(await socket.client_receive())["params"] == {"value": "last"}
+    assert socket.closed == (RpcConnectionClose.NORMAL, "")
+
+
+async def test_socket_closes_when_its_events_complete() -> None:
+    events = RpcChannel("events")
+
+    @events.server.event(payload=Params)
+    async def first() -> AsyncIterator[Params]:
+        yield Params(value="first")
+
+    @events.server.event(payload=Params)
+    async def second() -> AsyncIterator[Params]:
+        await asyncio.sleep(0.01)
+        yield Params(value="second")
+
+    rpc = RpcService()
+    rpc.socket("/events", channels=(events,), close_when_events_complete=True)
+    socket = DelayedSocket("/events")
+
+    await asyncio.wait_for(rpc.serve(socket), 1)
+
+    received = [json.loads(await socket.client_receive()) for _ in range(2)]
+    assert [message["params"]["value"] for message in received] == [
+        "first",
+        "second",
+    ]
+    assert socket.closed == (RpcConnectionClose.NORMAL, "")

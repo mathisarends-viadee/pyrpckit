@@ -124,3 +124,12 @@ def test_client_method_names_collide_across_channels() -> None:
 
     with pytest.raises(ProtocolDefinitionError, match="Duplicate RPC name"):
         service.freeze()
+
+
+def test_close_when_events_complete_requires_events() -> None:
+    service = RpcService()
+    service.socket(
+        "/rpc", channels=(RpcChannel("plain"),), close_when_events_complete=True
+    )
+    with pytest.raises(ProtocolDefinitionError, match="declare no events"):
+        service.freeze()

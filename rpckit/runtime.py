@@ -195,8 +195,11 @@ async def serve_endpoint(
                 try:
                     while True:
                         message = await outgoing.get()
-                        async with asyncio.timeout(limits.send_timeout):
-                            await socket.send(message)
+                        try:
+                            async with asyncio.timeout(limits.send_timeout):
+                                await socket.send(message)
+                        finally:
+                            outgoing.task_done()
                 except asyncio.CancelledError:
                     raise
                 except RpcDisconnect as error:
@@ -303,24 +306,32 @@ async def serve_endpoint(
                         return
                     logger.exception("RPC event source failed")
                     request_close(RpcConnectionClose.INTERNAL_ERROR, "Internal error")
+                    return
+                if endpoint.close_when_events_complete:
+                    request_close(RpcConnectionClose.NORMAL, "")
 
-            background = [
-                asyncio.create_task(writer()),
+            writer_task = asyncio.create_task(writer())
+            producers = [
                 asyncio.create_task(reader()),
                 asyncio.create_task(events()),
             ]
-            await close_event.wait()
-            for task in (*background, *tasks):
-                task.cancel()
-            await asyncio.gather(*background, *tasks, return_exceptions=True)
-            await subscriptions.close()
-            if close_value[0] in (
-                RpcConnectionClose.NORMAL,
-                RpcConnectionClose.SHUTDOWN,
-            ):
-                while not outgoing.empty():
-                    with suppress(RpcDisconnect):
-                        await socket.send(outgoing.get_nowait())
+            try:
+                await close_event.wait()
+                for task in (*producers, *tasks):
+                    task.cancel()
+                await asyncio.gather(*producers, *tasks, return_exceptions=True)
+                await subscriptions.close()
+                if close_value[0] in (
+                    RpcConnectionClose.NORMAL,
+                    RpcConnectionClose.SHUTDOWN,
+                ):
+                    await _flush(outgoing, writer_task, limits.send_timeout)
+            finally:
+                for task in (writer_task, *producers, *tasks):
+                    task.cancel()
+                await asyncio.gather(
+                    writer_task, *producers, *tasks, return_exceptions=True
+                )
     except asyncio.CancelledError:
         close_value[:] = [RpcConnectionClose.SHUTDOWN, ""]
         connection._close_code = RpcConnectionClose.SHUTDOWN
@@ -352,6 +363,18 @@ async def serve_endpoint(
 class RpcPendingLimitError(RpcError):
     code = "pending_limit"
     message = "Too many pending requests"
+
+
+async def _flush(
+    outgoing: asyncio.Queue[str], writer: asyncio.Task, timeout: float | None
+) -> None:
+    drained = asyncio.create_task(outgoing.join())
+    try:
+        await asyncio.wait(
+            (drained, writer), timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        drained.cancel()
 
 
 def _is_notification(message: object) -> bool:
