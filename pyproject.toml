@@ -1,6 +1,6 @@
 [project]
 name = "pyrpckit"
-version = "0.8.0"
+version = "0.10.0"
 description = "Decorator-driven, transport-agnostic JSON-RPC 2.0 protocols for Python"
 readme = "README.md"
 requires-python = ">=3.12"

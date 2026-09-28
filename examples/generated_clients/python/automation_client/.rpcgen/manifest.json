@@ -1,6 +1,6 @@
 {
   "generator": "rpckit",
-  "generatorVersion": "0.8.0",
+  "generatorVersion": "0.10.0",
   "layoutVersion": 10,
   "language": "python",
   "contractSha256": "6a2ad621d80668d7f7c4e4d2e33f534c37830deb4af37a222a016e1f837a2c11",

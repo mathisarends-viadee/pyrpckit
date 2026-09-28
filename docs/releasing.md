@@ -1,6 +1,6 @@
 # Releasing rpckit
 
-The current development version is 0.8.0. Until a release is cut, its
+The current development version is 0.10.0. Until a release is cut, its
 changelog heading stays `Unreleased`. Never assign a release date or tag to an
 unfinished version.
 
