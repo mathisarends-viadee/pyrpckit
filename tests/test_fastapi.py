@@ -346,7 +346,9 @@ async def open_job_session(
     return JobSession(Job(job_id), actor)
 
 
-def create_job_service(released: list[bool] | None = None) -> RpcService:
+def create_job_service(
+    released: list[bool] | None = None, *, rejections: RpcRejections | None = None
+) -> RpcService:
     events = RpcChannel("jobs")
 
     @events.server.method()
@@ -374,7 +376,7 @@ def create_job_service(released: list[bool] | None = None) -> RpcService:
         yield b"first"
         raise JobNotFound("Job was deleted")
 
-    service = RpcService()
+    service = RpcService(rejections=rejections)
     service.socket(
         "/jobs/{job_id}/events", channels=(events,), name="events", context=JobSession
     )
@@ -497,6 +499,24 @@ def test_rpc_routes_close_accepted_streams_with_mapped_rejections() -> None:
             "code": 1008,
             "reason": "Job was deleted",
         }
+
+
+def test_rpc_routes_fall_back_to_the_service_rejections() -> None:
+    web = create_job_app(
+        create_job_service(rejections={JobNotFound: RpcRejection.NOT_FOUND}),
+        rejections={KeyError: RpcRejection.UNAUTHORIZED},
+    )
+
+    with TestClient(web) as client:
+        with (
+            pytest.raises(WebSocketDenialResponse) as denied,
+            client.websocket_connect(f"/jobs/{UUID(int=2)}/events"),
+        ):
+            pass
+        with client.websocket_connect(f"/jobs/{KNOWN_JOB}/broken") as websocket:
+            assert websocket.receive_bytes() == b"first"
+            assert websocket.receive()["code"] == 1008
+    assert denied.value.status_code == 404
 
 
 def test_rpc_routes_key_a_subclass_context_by_the_declared_type() -> None:

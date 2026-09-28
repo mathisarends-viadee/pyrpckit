@@ -16,6 +16,7 @@ from rpckit.connection import (
     RpcRejection,
     RpcRejections,
     RpcSocket,
+    chain_rejections,
 )
 from rpckit.contract import RpcContract, ServerVariable
 from rpckit.dependencies import RpcResolverLike, resolver_with_context
@@ -44,6 +45,7 @@ class RpcEndpoint[ContextT]:
     path_model: type[BaseModel] | None = None
     context: type[ContextT] | None = None
     close_when_events_complete: bool = False
+    rejections: RpcRejections | None = None
     _protocol: RpcProtocol | None = field(default=None, init=False, repr=False)
 
     @property
@@ -105,7 +107,9 @@ class RpcEndpoint[ContextT]:
             error_mapper=error_mapper or self.error_mapper,
             limits=limits or self.limits,
             before_accept=before_accept or self.before_accept,
-            rejections=rejections,
+            rejections=chain_rejections(
+                rejections, self.rejections, self.service.rejections
+            ),
         )
 
     def create_server(
@@ -142,6 +146,7 @@ class RpcStreamEndpoint[ContextT]:
     before_accept: RpcBeforeAccept | None = None
     error_mapper: RpcErrorMapper | None = None
     context: type[ContextT] | None = None
+    rejections: RpcRejections | None = None
 
     def match(self, path: str) -> dict[str, str] | None:
         return _match(self.path, path)
@@ -167,7 +172,9 @@ class RpcStreamEndpoint[ContextT]:
             limits=limits or self.limits,
             before_accept=before_accept or self.before_accept,
             error_mapper=error_mapper or self.error_mapper,
-            rejections=rejections,
+            rejections=chain_rejections(
+                rejections, self.rejections, self.service.rejections
+            ),
         )
 
 
@@ -181,6 +188,7 @@ class RpcService:
         limits: RpcLimits | None = None,
         errors: Mapping[type[Exception], type[RpcError]] | None = None,
         strict_errors: bool = False,
+        rejections: RpcRejections | None = None,
     ) -> None:
         if not isinstance(version, int) or version < 1:
             raise ProtocolDefinitionError(
@@ -203,6 +211,7 @@ class RpcService:
                 )
             self._errors[exception] = rpc_error
         self._strict_errors = strict_errors
+        self._rejections = rejections
         self._endpoints: list[RpcEndpoint | RpcStreamEndpoint] = []
         self._channels: set[RpcChannel] = set()
         self._mounted_streams: set[FunctionType] = set()
@@ -228,6 +237,10 @@ class RpcService:
     def strict_errors(self) -> bool:
         return self._strict_errors
 
+    @property
+    def rejections(self) -> RpcRejections | None:
+        return self._rejections
+
     def socket[ContextT](
         self,
         path: str,
@@ -244,6 +257,7 @@ class RpcService:
         path_model: type[BaseModel] | None = None,
         context: type[ContextT] = NoneType,
         close_when_events_complete: bool = False,
+        rejections: RpcRejections | None = None,
     ) -> RpcEndpoint[ContextT]:
         self._ensure_mutable()
         variables = _validate_endpoint(self._endpoints, path, name, subprotocol)
@@ -289,6 +303,7 @@ class RpcService:
             path_model,
             None if context is NoneType else context,
             close_when_events_complete,
+            rejections,
         )
         self._endpoints.append(endpoint)
         self._channels.update(channels)
@@ -308,6 +323,7 @@ class RpcService:
         before_accept: RpcBeforeAccept | None = None,
         error_mapper: RpcErrorMapper | None = None,
         context: type[ContextT] = NoneType,
+        rejections: RpcRejections | None = None,
     ) -> RpcStreamEndpoint[ContextT]:
         self._ensure_mutable()
         variables = _validate_endpoint(self._endpoints, path, name, subprotocol)
@@ -341,6 +357,7 @@ class RpcService:
             before_accept,
             error_mapper or self._error_mapper,
             None if context is NoneType else context,
+            rejections,
         )
         self._endpoints.append(endpoint)
         self._channels.add(channel)

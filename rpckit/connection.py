@@ -113,6 +113,22 @@ def rejection_for(
     return rejections(error)
 
 
+def chain_rejections(*levels: RpcRejections | None) -> RpcRejections | None:
+    """Consult ``levels`` in order; the first one that maps a failure wins."""
+    present = [level for level in levels if level is not None]
+    if len(present) <= 1:
+        return present[0] if present else None
+
+    def reject(error: Exception) -> RpcReject | None:
+        for level in present:
+            rejected = rejection_for(error, level)
+            if rejected is not None:
+                return rejected
+        return None
+
+    return reject
+
+
 class RpcSocket(Protocol):
     @property
     def handshake(self) -> RpcHandshake: ...

@@ -495,3 +495,71 @@ async def test_socket_closes_when_its_events_complete() -> None:
         "second",
     ]
     assert socket.closed == (RpcConnectionClose.NORMAL, "")
+
+
+class SessionExpired(Exception):
+    pass
+
+
+class SessionNotFound(Exception):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("failure", "call_rejections", "expected"),
+    [
+        (SessionExpired("expired"), None, RpcRejection.UNAUTHORIZED),
+        (SessionNotFound("missing"), None, RpcRejection.NOT_FOUND),
+        (
+            SessionExpired("expired"),
+            {SessionExpired: RpcRejection.FORBIDDEN},
+            RpcRejection.FORBIDDEN,
+        ),
+        (
+            SessionNotFound("missing"),
+            {SessionExpired: RpcRejection.FORBIDDEN},
+            RpcRejection.NOT_FOUND,
+        ),
+        (SessionNotFound("missing"), lambda error: None, RpcRejection.NOT_FOUND),
+    ],
+)
+async def test_rejections_are_looked_up_from_call_to_endpoint_to_service(
+    failure: Exception, call_rejections, expected: RpcRejection
+) -> None:
+    async def authenticate(handshake: RpcHandshake) -> None:
+        raise failure
+
+    rpc = RpcService(
+        rejections={
+            SessionExpired: RpcRejection.UNAUTHORIZED,
+            SessionNotFound: RpcRejection.UNAVAILABLE,
+        }
+    )
+    rpc.socket(
+        "/rpc",
+        channels=(RpcChannel("sessions"),),
+        before_accept=authenticate,
+        rejections={SessionNotFound: RpcRejection.NOT_FOUND},
+    )
+
+    async with RpcTestClient(rpc, "/rpc", rejections=call_rejections) as client:
+        await client.closed()
+
+    assert client.socket.rejection == (expected, str(failure))
+
+
+async def test_stream_endpoints_apply_their_rejections() -> None:
+    audio = RpcChannel("audio")
+
+    @audio.server.stream()
+    async def frames() -> AsyncIterator[bytes]:
+        raise SessionNotFound("missing")
+        yield b""
+
+    rpc = RpcService()
+    rpc.stream("/audio", frames, rejections={SessionNotFound: RpcRejection.UNAVAILABLE})
+
+    async with RpcTestClient(rpc, "/audio") as client:
+        await asyncio.wait_for(client.closed(), 1)
+
+    assert client.socket.closed == (RpcConnectionClose.TRY_AGAIN_LATER, "missing")

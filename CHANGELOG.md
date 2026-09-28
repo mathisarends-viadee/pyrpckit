@@ -9,6 +9,12 @@
   source of the socket has finished, the queued notifications are sent and the
   connection closes with `NORMAL`. Sockets whose channels declare no events
   reject the option.
+- Declare connection rejection policies next to the endpoints with
+  `RpcService(rejections=...)`, `RpcService.socket(..., rejections=...)`, and
+  `RpcService.stream(..., rejections=...)`. A failure is looked up in the
+  call's `rejections=` first (`serve()`, `create_router()`,
+  `serve_websocket()`, `RpcRoutes`, `RpcTestClient`), then the endpoint's,
+  then the service's; the first level that maps it wins.
 
 ### Fixed
 

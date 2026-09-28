@@ -34,6 +34,7 @@ from rpckit.connection import (
     RpcLimits,
     RpcRejection,
     RpcRejections,
+    chain_rejections,
 )
 from rpckit.dependencies import RpcResolverLike
 from rpckit.runtime import _rejection
@@ -310,7 +311,17 @@ class RpcRoutes[ContextT]:
             self._route_path(endpoint),
             self._handler(endpoint),
             name=endpoint.name,
-            dependencies=[Depends(_reject_failures(self._rejections))],
+            dependencies=[
+                Depends(
+                    _reject_failures(
+                        chain_rejections(
+                            self._rejections,
+                            endpoint.rejections,
+                            endpoint.service.rejections,
+                        )
+                    )
+                )
+            ],
         )
         self._mounted.add(endpoint)
 

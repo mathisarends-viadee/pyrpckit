@@ -72,8 +72,30 @@ def reject(error: Exception) -> RpcReject | None:
     return None
 ```
 
-Pass it to `serve()`, `create_router()`, `serve_websocket()`, or
-`RpcTestClient`. The connection state decides what a rejection becomes:
+Declare it where the failures belong: on `RpcService` for failures every
+endpoint shares, on `socket()` or `stream()` for one endpoint's failures:
+
+```python
+app = RpcService(
+    rejections={
+        SessionExpired: RpcRejection.UNAUTHORIZED,
+        BackendUnavailable: RpcRejection.UNAVAILABLE,
+    },
+)
+app.socket(
+    "/sessions/{session_id}/events",
+    channels=(session_events,),
+    rejections={SessionNotFound: RpcRejection.NOT_FOUND},
+)
+```
+
+`serve()`, `create_router()`, `serve_websocket()`, `RpcRoutes`, and
+`RpcTestClient` accept `rejections=` as well. A failure is looked up in the
+call's policy first, then the endpoint's, then the service's; the first one
+that maps it wins, and a callable returning `None` passes it on. More specific
+levels therefore add or override mappings without repeating the others.
+
+The connection state decides what a rejection becomes:
 
 | Failure | Result |
 |---|---|

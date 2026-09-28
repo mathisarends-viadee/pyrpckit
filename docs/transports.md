@@ -142,7 +142,8 @@ instead: it creates a resolver per WebSocket and may wrap the context function.
 `rpckit.dishka.Dishka` is one such [integration](dependencies.md#dishka).
 
 `rejections=` follows
-[the core rules](connections-and-events.md#map-failures-to-rejections) and
+[the core rules](connections-and-events.md#map-failures-to-rejections), is
+consulted before the policies of the mounted endpoint and its service, and
 also covers the context function and its dependencies: before acceptance the
 handshake is rejected with an HTTP denial response, after acceptance the
 socket closes with the matching code. Unmapped failures propagate unchanged.
