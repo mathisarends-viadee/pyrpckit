@@ -104,6 +104,19 @@ async def start() -> None: ...  # voice.turn.start
 app.socket("/rpc", channels=(voice,))
 ```
 
+A single nested operation does not need a child channel. Names passed to the
+decorators are relative to the channel namespace and may contain dots; each
+segment is validated:
+
+```python
+@voice.server.method("settings.update")
+async def update_settings() -> None: ...  # voice.settings.update
+```
+
+Use a child channel when several operations share a namespace or need their
+own `raises=` or `resolver_scope=`; a dotted name uses its channel's
+configuration.
+
 For a standalone dotted namespace, the channel name can default to it:
 `RpcChannel(namespace="voice.turn")`.
 

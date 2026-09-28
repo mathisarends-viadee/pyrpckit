@@ -2,7 +2,14 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from rpckit import ProtocolDefinitionError, RpcChannel, RpcError, RpcModel, RpcServer
+from rpckit import (
+    ProtocolDefinitionError,
+    RpcChannel,
+    RpcError,
+    RpcModel,
+    RpcServer,
+    RpcService,
+)
 
 
 class SharedError(RpcError):
@@ -92,11 +99,72 @@ def test_channel_name_defaults_to_namespace() -> None:
     assert channel.namespace == "voice.turn"
 
 
-def test_dotted_operation_name_suggests_a_child_channel() -> None:
-    channel = RpcChannel("voice")
+def test_dotted_names_are_relative_to_the_channel_namespace() -> None:
+    channel = RpcChannel("input", namespace="browser.input", raises=[SharedError])
+    nested = channel.child("pointer.touch")
 
-    with pytest.raises(ProtocolDefinitionError, match=r"contains '\.'.*child"):
-        channel.server.method("turn.start")
+    @channel.server.method("text.insert")
+    async def insert_text() -> None: ...
+
+    @channel.server.event("text.changed")
+    async def text_changed() -> AsyncIterator[Event]:
+        yield Event(value="x")
+
+    @channel.server.subscription("text.watch")
+    async def watch_text() -> AsyncIterator[Event]:
+        yield Event(value="x")
+
+    @channel.server.stream("screen.frames")
+    async def screen_frames() -> AsyncIterator[bytes]:
+        yield b""
+
+    channel.client.method("clipboard.read")
+    protocol = channel.freeze()
+
+    assert protocol.methods[0].name == "browser.input.text.insert"
+    assert protocol.methods[0].raises == (SharedError,)
+    assert protocol.methods[0].request_name == "InsertTextRequest"
+    assert protocol.notifications[0].name == "browser.input.text.changed"
+    assert protocol.subscriptions[0].name == "browser.input.text.watch"
+    assert protocol.streams[0].name == "browser.input.screen.frames"
+    assert protocol.client_methods[0].name == "browser.input.clipboard.read"
+    assert nested.namespace == "browser.input.pointer.touch"
+
+
+@pytest.mark.parametrize("name", ["text..insert", ".insert", "text.", "text.1st", ""])
+def test_each_segment_of_a_dotted_name_is_validated(name: str) -> None:
+    channel = RpcChannel("input")
+
+    with pytest.raises(ProtocolDefinitionError, match="Invalid RPC method name"):
+        channel.server.method(name)
+
+
+def test_dotted_name_and_child_route_cannot_share_a_wire_name() -> None:
+    channel = RpcChannel("input")
+
+    @channel.server.method("text.insert")
+    async def insert_text() -> None: ...
+
+    @channel.child("text").server.method("insert")
+    async def insert() -> None: ...
+
+    with pytest.raises(ProtocolDefinitionError, match="Duplicate RPC method"):
+        channel.freeze()
+
+
+def test_dotted_name_cannot_turn_an_operation_into_a_namespace() -> None:
+    channel = RpcChannel("input")
+
+    @channel.server.method
+    async def text() -> None: ...
+
+    @channel.server.method("text.insert")
+    async def insert_text() -> None: ...
+
+    service = RpcService()
+    service.socket("/rpc", channels=(channel,))
+    with pytest.raises(ProtocolDefinitionError, match="both an operation"):
+        service.freeze()
 
 
 class PlayParams(RpcModel):
@@ -187,10 +255,8 @@ def test_client_method_names_collide_with_other_operations(declare: str) -> None
         channel.client.method("play")
 
 
-def test_client_method_rejects_dotted_names_and_non_model_params() -> None:
+def test_client_method_rejects_non_model_params() -> None:
     channel = RpcChannel("room")
 
-    with pytest.raises(ProtocolDefinitionError, match="contains '.'"):
-        channel.client.method("media.play")
     with pytest.raises(ProtocolDefinitionError, match="Pydantic model"):
         channel.client.method("play", params=dict)  # type: ignore[arg-type]

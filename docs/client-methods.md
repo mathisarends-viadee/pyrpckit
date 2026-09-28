@@ -70,9 +70,9 @@ media_play = media.client.method(
 ```
 
 `client.method()` returns an `RpcClientMethod[MediaPlayParams, MediaPlayResult]`
-named `room.media.play`. Like server methods, client method names are single
-segments inside the channel namespace. Use `channel.child(...)` for nested
-namespaces. Omit `params=` for a client method without params, and omit
+named `room.media.play`. Like server methods, client method names are
+relative to the channel namespace, so `room.client.method("media.play", ...)`
+declares the same name without a child channel. Omit `params=` for a client method without params, and omit
 `result=` for one that answers `null`. A client method name must not collide
 with a server method, event, or stream name. Channel-level `raises=` apply to
 server methods only, because client method errors come from the client.

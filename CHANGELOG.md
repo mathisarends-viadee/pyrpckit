@@ -15,6 +15,12 @@
   call's `rejections=` first (`serve()`, `create_router()`,
   `serve_websocket()`, `RpcRoutes`, `RpcTestClient`), then the endpoint's,
   then the service's; the first level that maps it wins.
+- Pass dotted names to `method()`, `event()`, `subscription()`, `stream()`,
+  `client.method()`, and `child()`. Names are relative to the channel
+  namespace and each segment is validated, so
+  `@channel.server.method("text.insert")` no longer needs a child channel.
+  Wire names, contracts, and generated clients match the child-channel
+  equivalent.
 
 ### Fixed
 

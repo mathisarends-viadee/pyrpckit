@@ -139,14 +139,14 @@ class RpcChannel:
 
     def child(
         self,
-        segment: str,
+        name: str,
         /,
         *,
         raises: Iterable[type[RpcError]] = (),
         resolver_scope: RpcResolverScope | None = None,
     ) -> "RpcChannel":
         self._ensure_mutable()
-        local = _segment(segment, "child channel name")
+        local = _name(name, "child channel name")
         child = RpcChannel(
             join_rpc_name(self.name, local),
             namespace=join_rpc_name(self.namespace, local),
@@ -290,7 +290,7 @@ class RpcServerSide:
             raise ProtocolDefinitionError(
                 "RPC method decorator expects a function or name"
             )
-        local_name = None if name is None else _segment(name, "method name")
+        local_name = None if name is None else _name(name, "method name")
         merged_raises = tuple(
             dict.fromkeys((*channel.raises, *(declared_error(e) for e in raises)))
         )
@@ -353,7 +353,7 @@ class RpcServerSide:
         def decorate(function: FunctionType) -> FunctionType:
             channel._validate_function(function, "event", coroutine=False)
             wire_name = join_rpc_name(
-                channel.namespace, _segment(name or function.__name__, "event name")
+                channel.namespace, _name(name or function.__name__, "event name")
             )
             definition = notification_definition(
                 name=wire_name,
@@ -393,7 +393,7 @@ class RpcServerSide:
             channel._validate_function(function, "subscription", coroutine=False)
             wire_name = join_rpc_name(
                 channel.namespace,
-                _segment(name or function.__name__, "subscription name"),
+                _name(name or function.__name__, "subscription name"),
             )
             definition = subscription_definition(
                 name=wire_name,
@@ -449,7 +449,7 @@ class RpcServerSide:
 
         def decorate(function: FunctionType) -> FunctionType:
             channel._validate_function(function, "stream", coroutine=False)
-            local = _segment(name or function.__name__, "stream name")
+            local = _name(name or function.__name__, "stream name")
             wire_name = join_rpc_name(channel.namespace, local)
             definition = stream_definition(
                 name=wire_name,
@@ -486,9 +486,7 @@ class RpcClientSide:
         """Declare a request the server sends and the connected client answers."""
         channel = self._channel
         channel._ensure_mutable()
-        wire_name = join_rpc_name(
-            channel.namespace, _segment(name, "client method name")
-        )
+        wire_name = join_rpc_name(channel.namespace, _name(name, "client method name"))
         definition = client_method_definition(
             name=wire_name,
             params=params,
@@ -508,21 +506,15 @@ def join_rpc_name(*parts: str) -> str:
 def normalize_namespace(value: object) -> str:
     namespace = str(value)
     if namespace:
-        for part in namespace.split("."):
-            _segment(part, "namespace")
+        _name(namespace, "namespace")
     return namespace
 
 
-def _segment(value: object, kind: str) -> str:
-    if isinstance(value, str) and "." in value:
-        raise ProtocolDefinitionError(
-            f"RPC {kind} {value!r} contains '.'; names are single segments "
-            "inside the channel namespace. Use channel.child(...) for a nested "
-            "namespace."
-        )
-    if (
-        not isinstance(value, str)
-        or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", value) is None
+def _name(value: object, kind: str) -> str:
+    """Validate a name relative to a namespace; dots separate its segments."""
+    if not isinstance(value, str) or any(
+        re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", segment) is None
+        for segment in value.split(".")
     ):
         raise ProtocolDefinitionError(f"Invalid RPC {kind}: {value!r}")
     return value
