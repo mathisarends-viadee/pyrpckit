@@ -597,7 +597,10 @@ async def test_event_bindings_are_scoped_and_exported(declared, caplog) -> None:
         message="Session unavailable",
         rejection=RpcRejection.UNAVAILABLE,
     )
-    channel = RpcChannel("session")
+    fallback = RpcErrorBinding(
+        SessionNotFound, code="session_denied", rejection=RpcRejection.FORBIDDEN
+    )
+    channel = RpcChannel("session", raises=[fallback] if declared else [])
 
     @channel.server.event(raises=[binding] if declared else [], on_error="close")
     async def updates() -> AsyncIterator[Params]:
@@ -613,6 +616,11 @@ async def test_event_bindings_are_scoped_and_exported(declared, caplog) -> None:
         title="Sessions", base_url="ws://localhost"
     ).to_openrpc()
     assert ("errors" in document["x-rpc-notifications"][0]) is declared
+    if declared:
+        assert [
+            error["x-rpckit-code"]
+            for error in document["x-rpc-notifications"][0]["errors"]
+        ] == [binding.code]
     async with RpcTestClient(service, "/rpc") as client:
         await asyncio.wait_for(client.closed(), 1)
     assert client.socket.closed == (

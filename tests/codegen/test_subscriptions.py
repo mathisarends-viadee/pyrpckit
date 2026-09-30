@@ -36,7 +36,8 @@ class SessionMissing(Exception):
 async def test_generated_python_subscription_errors_are_typed(
     tmp_path, declared
 ) -> None:
-    channel = RpcChannel("session")
+    default = RpcErrorBinding(SessionMissing, code="session_unavailable")
+    channel = RpcChannel("session", raises=[default] if declared else [])
     binding = RpcErrorBinding(SessionMissing, details=FailureDetails)
 
     @channel.server.subscription(raises=[binding] if declared else [])
@@ -58,6 +59,7 @@ async def test_generated_python_subscription_errors_are_typed(
     importlib.invalidate_caches()
     try:
         module = importlib.import_module(package)
+        assert not hasattr(module, "SessionUnavailableError")
         socket = InMemorySocket("/rpc")
         server = asyncio.create_task(service.serve(socket))
 

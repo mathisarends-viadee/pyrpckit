@@ -114,7 +114,8 @@ async def update_settings() -> None: ...  # voice.settings.update
 ```
 
 Use a child channel when several operations share a namespace or need their
-own `raises=` or `resolver_scope=`; a dotted name uses its channel's
+own `raises=` or `resolver_scope=`; local bindings override inherited bindings
+for the same domain exception. A dotted name uses its channel's
 configuration.
 
 For a standalone dotted namespace, the channel name can default to it:

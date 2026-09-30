@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, WebSocket
 from fastapi.testclient import TestClient
 
 from rpckit import Inject, RpcChannel, RpcService
@@ -168,7 +168,8 @@ def test_dishka_exposes_the_context_to_dishka_providers() -> None:
         assert websocket.receive_json()["result"] == 7
 
 
-def test_dishka_injects_the_context_function() -> None:
+@pytest.mark.parametrize("transport_parameter", ["implicit", "explicit", "collision"])
+def test_dishka_injects_the_context_function(transport_parameter: str) -> None:
     @dataclass(frozen=True)
     class Owners:
         prefix: str
@@ -196,6 +197,24 @@ def test_dishka_injects_the_context_function() -> None:
 
     async def open_owner(owner_id: int, owners: dishka.FromDishka[Owners]) -> Owner:
         return Owner(f"{owners.prefix}-{owner_id}")
+
+    if transport_parameter == "explicit":
+
+        async def open_owner(
+            owner_id: int, owners: dishka.FromDishka[Owners], websocket: WebSocket
+        ) -> Owner:
+            assert websocket.url.path == f"/owners/{owner_id}/rpc"
+            return Owner(f"{owners.prefix}-{owner_id}")
+
+    elif transport_parameter == "collision":
+
+        async def open_owner(
+            owner_id: int,
+            owners: dishka.FromDishka[Owners],
+            _rpckit_websocket: str = "context",
+        ) -> Owner:
+            assert _rpckit_websocket == "context"
+            return Owner(f"{owners.prefix}-{owner_id}")
 
     RpcRoutes(router, context=open_owner, resolver=Dishka()).mount(endpoint)
 

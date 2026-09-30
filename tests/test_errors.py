@@ -1,4 +1,5 @@
 import logging
+from collections.abc import AsyncIterator
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -176,11 +177,12 @@ async def _call(service: RpcService, method: str, task_id: int) -> RpcFailure:
 
 def test_contract_metadata_is_derived_like_rpc_errors() -> None:
     assert task_not_found.code == "task_not_found"
-    assert task_not_found.error.message == "Task not found"
-    assert task_not_found.error.rpc_code == RpcErrorCode.SERVER_ERROR
-    assert task_not_found.error.details_type is TaskRef
-    assert task_locked.error.details_type is LockDetails
-    assert task_locked.error.__name__ == "TaskLockedRpcError"
+    assert task_not_found.error_type.message == "Task not found"
+    assert task_not_found.error_type.rpc_code == RpcErrorCode.SERVER_ERROR
+    assert task_not_found.error_type.details_type is TaskRef
+    assert task_locked.error_type.details_type is LockDetails
+    assert task_locked.error_type.__name__ == "TaskLockedRpcError"
+    assert not hasattr(task_not_found, "error")
 
 
 async def test_contracts_answer_the_domain_exceptions_they_bind() -> None:
@@ -274,14 +276,145 @@ async def test_an_exception_can_have_different_bindings_per_method() -> None:
         assert result.error.data.code == code
 
 
-def test_ambiguous_bindings_on_one_method_are_rejected() -> None:
+async def test_method_binding_overrides_channel_default() -> None:
     channel = RpcChannel("tasks", raises=[task_not_found])
+    gone = RpcErrorBinding(TaskNotFound, code="gone")
 
-    @channel.server.method(raises=[RpcErrorBinding(TaskNotFound, code="gone")])
+    @channel.server.method(raises=[gone])
+    async def read() -> None:
+        raise TaskNotFound(1)
+
+    @channel.server.method()
+    async def lookup() -> None:
+        raise TaskNotFound(1)
+
+    assert channel.raises == (task_not_found.error_type,)
+    server = channel.create_server()
+    assert server.protocol.method("tasks.read").raises == (gone.error_type,)
+    assert server.protocol.method("tasks.lookup").raises == (task_not_found.error_type,)
+    service = RpcService()
+    service.socket("/tasks", channels=[channel])
+    document = service.contract(title="Tasks", base_url="ws://localhost").to_openrpc()
+    read_document = next(
+        method for method in document["methods"] if method["name"] == "tasks.read"
+    )
+    assert [error["x-rpckit-code"] for error in read_document["errors"]] == ["gone"]
+    for name, code in [("read", "gone"), ("lookup", "task_not_found")]:
+        result = await server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": f"tasks.{name}"}
+        )
+        assert result.error.data.code == code
+
+
+@pytest.mark.parametrize("kind", ["method", "event", "subscription"])
+def test_ambiguous_bindings_are_rejected_during_registration(kind) -> None:
+    channel = RpcChannel("tasks")
+    gone = RpcErrorBinding(TaskNotFound, code="gone")
+
     async def read() -> None: ...
 
-    with pytest.raises(ProtocolDefinitionError, match="bound to RPC error bindings"):
-        channel.freeze()
+    async def events() -> AsyncIterator[TaskRef]:
+        yield TaskRef(task_id=1)
+
+    function = read if kind == "method" else events
+    decorate = getattr(channel.server, kind)
+    with pytest.raises(
+        ProtocolDefinitionError,
+        match=rf"RPC {kind} tasks.custom.read: TaskNotFound.*task_not_found.*gone",
+    ):
+        decorate("custom.read", raises=[task_not_found, gone])(function)
+
+    # A rejected definition must not reserve its name.
+    decorate("custom.read", raises=[gone])(function)
+    definition = getattr(
+        channel.protocol,
+        {
+            "method": "methods",
+            "event": "notifications",
+            "subscription": "subscriptions",
+        }[kind],
+    )[0]
+    assert definition.raises == (gone.error_type,)
+
+
+def test_ambiguous_channel_bindings_are_rejected_at_creation() -> None:
+    with pytest.raises(
+        ProtocolDefinitionError, match=r"RPC channel tasks: TaskNotFound"
+    ):
+        RpcChannel(
+            "tasks", raises=[task_not_found, RpcErrorBinding(TaskNotFound, code="gone")]
+        )
+
+
+async def test_child_channel_overrides_defaults_without_changing_parent() -> None:
+    archived = RpcErrorBinding(ArchivedTaskNotFound, code="archived_task_missing")
+    child_binding = RpcErrorBinding(TaskNotFound, code="child_task_missing")
+    local_binding = RpcErrorBinding(TaskNotFound, code="local_task_missing")
+    root = RpcChannel("tasks", raises=[task_not_found, archived, HTTPTimeoutError])
+    child = root.child("admin", raises=[child_binding])
+
+    @root.server.method()
+    async def read() -> None:
+        raise TaskNotFound(1)
+
+    @child.server.method()
+    async def read_child() -> None:
+        raise TaskNotFound(1)
+
+    @child.server.method(raises=[local_binding])
+    async def read_local() -> None:
+        raise TaskNotFound(1)
+
+    @child.server.method(raises=[local_binding])
+    async def read_archived() -> None:
+        raise ArchivedTaskNotFound(1)
+
+    assert root.raises == (
+        task_not_found.error_type,
+        archived.error_type,
+        HTTPTimeoutError,
+    )
+    assert child.raises == (
+        archived.error_type,
+        HTTPTimeoutError,
+        child_binding.error_type,
+    )
+    service = RpcService()
+    endpoint = service.socket("/rpc", channels=[root])
+    server = endpoint.create_server()
+    for method, code in [
+        ("tasks.read", "task_not_found"),
+        ("tasks.admin.read_child", "child_task_missing"),
+        ("tasks.admin.read_local", "local_task_missing"),
+        ("tasks.admin.read_archived", "archived_task_missing"),
+    ]:
+        response = await server.handle({"jsonrpc": "2.0", "id": 1, "method": method})
+        assert response.error.data.code == code
+
+
+def test_conflicting_child_bindings_are_rejected_before_registration() -> None:
+    root = RpcChannel("tasks", raises=[task_not_found])
+    with pytest.raises(
+        ProtocolDefinitionError, match=r"RPC channel tasks.admin: TaskNotFound"
+    ):
+        root.child(
+            "admin", raises=[task_not_found, RpcErrorBinding(TaskNotFound, code="gone")]
+        )
+    assert root.children == ()
+
+
+@pytest.mark.parametrize("return_annotation", ["UnknownDetailsModel", "list["])
+def test_details_annotation_failures_are_definition_errors(return_annotation) -> None:
+    def details(error: TaskNotFound) -> TaskRef:
+        return TaskRef(task_id=error.task_id)
+
+    details.__annotations__["return"] = return_annotation
+    with pytest.raises(
+        ProtocolDefinitionError,
+        match=r"RPC error binding TaskNotFound: cannot resolve details annotations",
+    ) as caught:
+        RpcErrorBinding(TaskNotFound, details=details)
+    assert isinstance(caught.value.__cause__, (NameError, SyntaxError))
 
 
 def test_details_fields_are_checked_at_definition() -> None:
@@ -308,8 +441,8 @@ def test_generated_binding_error_does_not_collide_with_domain_exception() -> Non
         pass
 
     binding = RpcErrorBinding(TaskNotFoundError)
-    assert binding.error.__name__ == "TaskNotFoundRpcError"
-    assert binding.error.__name__ != TaskNotFoundError.__name__
+    assert binding.error_type.__name__ == "TaskNotFoundRpcError"
+    assert binding.error_type.__name__ != TaskNotFoundError.__name__
 
 
 async def test_strict_errors_accept_subclasses_of_declared_rpc_errors() -> None:
@@ -423,6 +556,9 @@ def test_client_methods_declare_rpc_errors_only() -> None:
         RpcChannel("room").client.method("ping", raises=[task_not_found])
 
 
-def test_errors_mapping_is_deprecated() -> None:
-    with pytest.warns(DeprecationWarning, match="RpcErrorBinding"):
+def test_legacy_errors_mapping_is_removed() -> None:
+    with pytest.raises(TypeError, match="errors"):
         RpcService(errors={TaskNotFound: HTTPTimeoutError})
+    with pytest.raises(TypeError, match="errors"):
+        RpcChannel("tasks").create_server(errors={TaskNotFound: HTTPTimeoutError})
+    assert not hasattr(RpcService(), "errors")

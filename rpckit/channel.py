@@ -20,8 +20,8 @@ from rpckit.errors import (
     RpcError,
     RpcErrorBinding,
     RpcErrorDeclaration,
-    declared_error,
-    warn_errors_mapping,
+    error_declarations,
+    merge_error_declarations,
 )
 from rpckit.observer import RpcObserverLike
 from rpckit.protocol import (
@@ -75,7 +75,7 @@ class RpcChannel:
         if not self._name:
             raise ProtocolDefinitionError("RPC channel name cannot be empty")
         self._namespace = resolved_namespace
-        self._raises = tuple(dict.fromkeys(declared_error(item) for item in raises))
+        self._raises = error_declarations(raises, owner=f"RPC channel {self.name}")
         if not callable(resolver_scope):
             raise ProtocolDefinitionError("RPC resolver scope must be callable")
         self._resolver_scope = resolver_scope
@@ -157,7 +157,11 @@ class RpcChannel:
         child = RpcChannel(
             join_rpc_name(self.name, local),
             namespace=join_rpc_name(self.namespace, local),
-            raises=(*self.raises, *raises),
+            raises=merge_error_declarations(
+                self.raises,
+                raises,
+                owner=f"RPC channel {join_rpc_name(self.name, local)}",
+            ),
             resolver_scope=resolver_scope or self.resolver_scope,
         )
         self._children.append(child)
@@ -226,18 +230,14 @@ class RpcChannel:
         error_mapper: RpcErrorMapper | None = None,
         observer: RpcObserverLike | None = None,
         limits: RpcLimits | None = None,
-        errors: Mapping[type[Exception], type[RpcError]] | None = None,
         strict_errors: bool = False,
     ) -> RpcServer:
-        if errors is not None:
-            warn_errors_mapping()
         return RpcServer._from_channel(
             self.protocol,
             resolver=resolver_with_context(resolver, context),
             error_mapper=error_mapper,
             observer=observer,
             limits=limits,
-            errors=errors,
             strict_errors=strict_errors,
         )
 
@@ -300,14 +300,15 @@ class RpcServerSide:
                 "RPC method decorator expects a function or name"
             )
         local_name = None if name is None else _name(name, "method name")
-        merged_raises = tuple(
-            dict.fromkeys((*channel.raises, *(declared_error(e) for e in raises)))
-        )
+        raises = tuple(raises)
 
         def decorate(function: FunctionType) -> FunctionType:
             channel._validate_function(function, "method", coroutine=True)
             wire_name = join_rpc_name(
                 channel.namespace, local_name or function.__name__
+            )
+            merged_raises = merge_error_declarations(
+                channel.raises, raises, owner=f"RPC method {wire_name}"
             )
             channel._reserve(wire_name)
             channel._routes.append(
@@ -360,14 +361,15 @@ class RpcServerSide:
             raise ProtocolDefinitionError(
                 "RPC event decorator expects a function or name"
             )
-        merged_raises = tuple(
-            dict.fromkeys((*channel.raises, *(declared_error(e) for e in raises)))
-        )
+        raises = tuple(raises)
 
         def decorate(function: FunctionType) -> FunctionType:
             channel._validate_function(function, "event", coroutine=False)
             wire_name = join_rpc_name(
                 channel.namespace, _name(name or function.__name__, "event name")
+            )
+            merged_raises = merge_error_declarations(
+                channel.raises, raises, owner=f"RPC event {wire_name}"
             )
             definition = notification_definition(
                 name=wire_name,
@@ -413,15 +415,16 @@ class RpcServerSide:
             raise ProtocolDefinitionError(
                 "RPC subscription decorator expects a function or name"
             )
-        merged_raises = tuple(
-            dict.fromkeys((*channel.raises, *(declared_error(e) for e in raises)))
-        )
+        raises = tuple(raises)
 
         def decorate(function: FunctionType) -> FunctionType:
             channel._validate_function(function, "subscription", coroutine=False)
             wire_name = join_rpc_name(
                 channel.namespace,
                 _name(name or function.__name__, "subscription name"),
+            )
+            merged_raises = merge_error_declarations(
+                channel.raises, raises, owner=f"RPC subscription {wire_name}"
             )
             definition = subscription_definition(
                 name=wire_name,
@@ -527,7 +530,7 @@ class RpcClientSide:
             params=params,
             result=result,
             summary=summary,
-            raises=tuple(dict.fromkeys(declared_error(e) for e in raises)),
+            raises=error_declarations(raises, owner=f"RPC client method {wire_name}"),
         )
         channel._reserve(wire_name)
         channel._client_methods.append(definition)

@@ -157,9 +157,12 @@ class RpcProtocol:
         )
         for operation in (*self.methods, *self.notifications, *self.subscriptions):
             bind_contracts(
-                contract
-                for error in operation.raises
-                if (contract := contract_of(error)) is not None
+                (
+                    contract
+                    for error in operation.raises
+                    if (contract := contract_of(error)) is not None
+                ),
+                owner=f"RPC operation {operation.name}",
             )
 
     @property

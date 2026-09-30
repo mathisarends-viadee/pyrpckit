@@ -186,7 +186,6 @@ async def serve_endpoint(
                 observer=endpoint.observer,
                 connection=connection,
                 limits=limits,
-                errors=endpoint.service.errors,
                 strict_errors=endpoint.service.strict_errors,
             )
             subscriptions = SubscriptionSession(

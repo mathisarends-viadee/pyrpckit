@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 
 from rpckit.codec import RpcCodec
 from rpckit.connection import RpcConnection, RpcLimits
@@ -49,7 +49,6 @@ class RpcServer:
         observer: RpcObserverLike | None = None,
         connection: RpcConnection | None = None,
         limits: RpcLimits | None = None,
-        errors: Mapping[type[Exception], type[RpcError]] | None = None,
         strict_errors: bool = False,
     ) -> "RpcServer":
         server = cls.__new__(cls)
@@ -61,7 +60,6 @@ class RpcServer:
         server._codec = RpcCodec()
         server._limits = limits or RpcLimits()
         server._semaphore = asyncio.Semaphore(server._limits.max_concurrency)
-        server._errors = dict(errors or {})
         server._strict_errors = strict_errors
         return server
 
@@ -180,21 +178,16 @@ class RpcServer:
                 mapped = contract.to_error(error)
             except Exception:
                 logger.exception(
-                    "RPC error contract %s failed for method %s", contract.code, method
+                    "RPC error binding %s failed for method %s", contract.code, method
                 )
                 return RpcInternalError()
         else:
             try:
-                mapped = next(
-                    (
-                        rpc_error(message=str(error))
-                        for exception, rpc_error in self._errors.items()
-                        if isinstance(error, exception)
-                    ),
-                    None,
+                mapped = (
+                    self._error_mapper(error)
+                    if self._error_mapper is not None
+                    else None
                 )
-                if mapped is None and self._error_mapper is not None:
-                    mapped = self._error_mapper(error)
                 if mapped is not None and not isinstance(mapped, RpcError):
                     raise TypeError("RPC error mapper must return RpcError or None")
             except Exception:

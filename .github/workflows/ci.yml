@@ -51,23 +51,25 @@ jobs:
       - name: Run tests
         run: uv run --python ${{ matrix.python-version }} pytest
 
-  fastapi-compatibility:
+  dependency-compatibility:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        fastapi: ["minimum", "latest"]
+        dependencies: ["minimum", "latest"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
       - run: uv python install 3.12
       - run: uv sync --all-groups --python 3.12
       - name: Select supported minimum
-        if: matrix.fastapi == 'minimum'
+        if: matrix.dependencies == 'minimum'
         run: |
-          minimum=$(uv run --no-sync python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["optional-dependencies"]["fastapi"][0].replace(">=", "=="))')
-          uv pip install "$minimum"
-      - name: Select latest FastAPI
-        if: matrix.fastapi == 'latest'
-        run: uv pip install --upgrade fastapi
-      - name: Test public WebSocket integration and contracts
-        run: uv run --no-sync pytest tests/test_fastapi.py tests/test_runtime.py tests/test_contract.py
+          minimum=$(uv run --no-sync python -c 'import tomllib; p = tomllib.load(open("pyproject.toml", "rb"))["project"]; print(" ".join(d.replace(">=", "==") for d in p["dependencies"] + sum(p["optional-dependencies"].values(), [])))')
+          uv pip install $minimum
+      - name: Select latest dependencies
+        if: matrix.dependencies == 'latest'
+        run: |
+          latest=$(uv run --no-sync python -c 'import tomllib; p = tomllib.load(open("pyproject.toml", "rb"))["project"]; print(" ".join(p["dependencies"] + sum(p["optional-dependencies"].values(), [])))')
+          uv pip install --upgrade $latest
+      - name: Test all integrations and generated clients
+        run: uv run --no-sync pytest

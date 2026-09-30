@@ -22,12 +22,9 @@ from rpckit.contract import RpcContract, ServerVariable
 from rpckit.dependencies import RpcResolverLike, resolver_with_context
 from rpckit.errors import (
     ProtocolDefinitionError,
-    RpcError,
     RpcErrorBinding,
     contract_rejections,
-    declared_error,
     rejecting_contracts,
-    warn_errors_mapping,
 )
 from rpckit.observer import RpcObserverLike
 from rpckit.protocol import RpcProtocol, RpcStreamDefinition
@@ -133,7 +130,6 @@ class RpcEndpoint[ContextT]:
             error_mapper=error_mapper or self.error_mapper,
             observer=observer or self.observer,
             limits=limits or self.limits,
-            errors=self.service.errors,
             strict_errors=self.service.strict_errors,
         )
 
@@ -190,7 +186,6 @@ class RpcService:
         error_mapper: RpcErrorMapper | None = None,
         observer: RpcObserverLike | None = None,
         limits: RpcLimits | None = None,
-        errors: Mapping[type[Exception], type[RpcError]] | None = None,
         strict_errors: bool = False,
         rejects: Sequence[RpcErrorBinding[Any]] = (),
     ) -> None:
@@ -202,20 +197,6 @@ class RpcService:
         self._error_mapper = error_mapper
         self._observer = observer
         self._limits = limits or RpcLimits()
-        if errors is not None:
-            warn_errors_mapping()
-        self._errors: dict[type[Exception], type[RpcError]] = {}
-        for exception, rpc_error in (errors or {}).items():
-            if not isinstance(exception, type) or not issubclass(exception, Exception):
-                raise ProtocolDefinitionError(
-                    "RPC error mapping keys must be Exception subclasses"
-                )
-            declared_error(rpc_error)
-            if rpc_error.details_type is not None:
-                raise ProtocolDefinitionError(
-                    "Declaratively mapped RPC errors cannot require details"
-                )
-            self._errors[exception] = rpc_error
         self._strict_errors = strict_errors
         self._rejects = rejecting_contracts(rejects, "RpcService")
         self._endpoints: list[RpcEndpoint | RpcStreamEndpoint] = []
@@ -234,10 +215,6 @@ class RpcService:
     @property
     def protocol(self) -> RpcProtocol:
         return self.freeze()
-
-    @property
-    def errors(self) -> Mapping[type[Exception], type[RpcError]]:
-        return self._errors
 
     @property
     def strict_errors(self) -> bool:

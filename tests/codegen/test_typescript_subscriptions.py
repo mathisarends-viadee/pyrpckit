@@ -29,7 +29,8 @@ def test_generated_typescript_subscription(tmp_path: Path) -> None:
     node = shutil.which("node.exe") or shutil.which("node")
     if npx is None or node is None:
         pytest.skip("Node.js and npx are required")
-    channel = RpcChannel("session")
+    default = RpcErrorBinding(SessionMissing, code="session_unavailable")
+    channel = RpcChannel("session", raises=[default])
 
     @channel.server.subscription(
         raises=[RpcErrorBinding(SessionMissing, details=SessionParams)]

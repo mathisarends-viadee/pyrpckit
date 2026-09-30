@@ -4,20 +4,27 @@
 
 ### Migration from 0.9
 
-- No public API was removed or renamed; `RpcService(errors=...)` is
-  deprecated. Regenerate committed Python and TypeScript clients so
+- `RpcService(errors=...)`, `RpcChannel.create_server(errors=...)`, and
+  `RpcService.errors` are removed. Replace the global exception mapping with
+  `RpcErrorBinding` declarations in the relevant operations' `raises=`.
+  `error_mapper` remains available for custom mapping logic.
+- Regenerate committed Python and TypeScript clients so
   `rpckit generate --check` passes and subscription failures are decoded as
   structured RPC errors.
 - Normal and shutdown closes now wait until queued messages are sent, bounded by
   `RpcLimits.send_timeout`. Remove workarounds that tracked socket sends before
   calling `connection.close()`, and use `close_when_events_complete=True` for
   sockets that should end with their event sources.
-- Replace `RpcService(errors={TaskNotFound: TaskNotFoundRpcError})` with an
-  `RpcErrorBinding(TaskNotFound, ...)` declared in the methods' `raises=`.
-  The deprecated mapping keeps working and emits a `DeprecationWarning`.
+- Users of earlier 0.10 PR revisions must replace `RpcErrorContract` with
+  `RpcErrorBinding`, `binding.error` with `binding.error_type`, and connection
+  `raises=` with `rejects=`. These names have no compatibility aliases.
+- Child-channel and operation bindings override inherited bindings for the
+  same exception class. Other inherited errors are kept. Conflicting bindings
+  within one declaration raise `ProtocolDefinitionError` when that channel or
+  operation is registered, with its name in the diagnostic.
 - `rejections=` passed to `serve()`, `create_router()`, `serve_websocket()`,
   `RpcRoutes`, or `RpcTestClient` keeps working and is consulted first. Move
-  mappings repeated at several call sites to contracts in
+  mappings repeated at several call sites to bindings in
   `RpcService(rejects=...)` or in the endpoint's `socket(rejects=...)` or
   `stream(rejects=...)`.
 - Child channels that only hold a single operation can become a dotted name on
@@ -32,7 +39,7 @@
   connection closes with `NORMAL`. Sockets whose channels declare no events
   reject the option.
 - Bind domain exceptions to RPC errors with `RpcErrorBinding`, so domain code
-  no longer imports rpckit. A contract sets the same `code`, `message`,
+  no longer imports rpckit. A binding sets the same `code`, `message`,
   `rpc_code`, and `details` as an `RpcError` subclass, reads dynamic messages
   and details from the exception, and may name the `RpcRejection` the
   exception becomes when it ends a connection. Declare it in `raises=` of
@@ -42,12 +49,17 @@
   different bindings on different operations. The most specific binding matches
   subclasses. Required `details=Model` field names are checked at definition,
   and `binding.check(exception)` validates a representative instance. Server
-  error classes use an `RpcError` suffix to avoid domain exception collisions. Export
-  `RpcErrorBinding` and `RpcErrorDeclaration`.
-- Declare connection failures next to the endpoints with contracts in
+  error classes use an `RpcError` suffix to avoid domain exception collisions;
+  `binding.error_type` exposes the generated class. Export `RpcErrorBinding`
+  and `RpcErrorDeclaration`.
+- Override a channel's binding at a child channel, method, event, or
+  subscription for the same domain exception. Overrides affect only that
+  operation or child channel, including its OpenRPC and generated client
+  declarations. Bindings for more specific exception subclasses are retained.
+- Declare connection failures next to the endpoints with bindings in
   `RpcService(rejects=...)`, `RpcService.socket(..., rejects=...)`,
   `RpcService.stream(..., rejects=...)`, and `RpcRoutes(..., rejects=...)`.
-  The contract's message becomes the rejection reason. A failure is looked up
+  The binding's message becomes the rejection reason. A failure is looked up
   in the call's `rejections=` first (`serve()`, `create_router()`,
   `serve_websocket()`, `RpcRoutes`, `RpcTestClient`), then the endpoint's
   `rejects=`, then the service's; the first level that maps it wins.
@@ -58,13 +70,23 @@
   Wire names, contracts, and generated clients match the child-channel
   equivalent.
 
-### Deprecated
+### Removed
 
-- `RpcService(errors=...)` and `RpcChannel.create_server(errors=...)`; declare
-  `RpcErrorBinding` values in `raises=` instead.
+- The service-wide `errors=` mapping, the channel server's `errors=` parameter,
+  and the `RpcService.errors` property. No deprecated fallback is retained.
+- The earlier 0.10 draft's `RpcErrorBinding.error` attribute; use `error_type`.
 
 ### Fixed
 
+- Dishka context injection through `RpcRoutes` works on the supported minimum
+  Dishka 1.7 and FastAPI 0.115 versions: the injector resolves from the
+  WebSocket's container instead of requiring an HTTP request.
+- Conflicting error bindings are rejected during channel or operation
+  registration instead of waiting for freeze. Diagnostics identify the channel,
+  method, event, or subscription and both conflicting error codes.
+- Unresolvable or invalid `details=` callback annotations raise
+  `ProtocolDefinitionError` with the domain exception's name and the original
+  cause. Error-binding diagnostics consistently use "binding" terminology.
 - `strict_errors=True` accepts subclasses of declared `RpcError` types.
 - Exceptions raised by an `error_mapper` are logged and contained as
   `internal_error`, including for notifications.

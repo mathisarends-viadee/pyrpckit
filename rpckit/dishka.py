@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, cast
+from inspect import Parameter, signature
+from typing import TYPE_CHECKING, Any, get_type_hints
 
 if TYPE_CHECKING:
     from dishka import AsyncContainer
@@ -86,9 +87,36 @@ class Dishka:
         self, function: FunctionT
     ) -> FunctionT:
         try:
-            from dishka.integrations.fastapi import inject
+            from dishka.integrations.base import wrap_injection
+            from fastapi import WebSocket
         except ImportError as error:
             raise ModuleNotFoundError(
                 "Dishka requires the 'fastapi' and 'dishka' extras"
             ) from error
-        return cast("FunctionT", inject(function))
+        hints = get_type_hints(function)
+        parameters = signature(function).parameters
+        websocket_name = next(
+            (name for name in parameters if hints.get(name) is WebSocket), None
+        )
+        additional_params = []
+        if websocket_name is None:
+            websocket_name = "_rpckit_websocket"
+            while websocket_name in parameters:
+                websocket_name = "_" + websocket_name
+            additional_params.append(
+                Parameter(
+                    websocket_name,
+                    Parameter.KEYWORD_ONLY,
+                    annotation=WebSocket,
+                )
+            )
+        # Dishka's FastAPI injector used Request for missing transport arguments
+        # in 1.7; a WebSocket dependency needs the WebSocket's container instead.
+        return wrap_injection(
+            func=function,
+            is_async=True,
+            additional_params=additional_params,
+            container_getter=lambda _, values: (
+                values[websocket_name].state.dishka_container
+            ),
+        )

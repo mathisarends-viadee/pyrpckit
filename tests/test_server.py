@@ -305,7 +305,7 @@ async def test_batch_size_limit_rejects_batch() -> None:
     assert response.error.code == RpcErrorCode.INVALID_REQUEST
 
 
-async def test_declarative_error_mapping_and_strict_errors() -> None:
+async def test_custom_error_mapper_and_strict_errors() -> None:
     class DomainMissing(Exception):
         pass
 
@@ -322,8 +322,14 @@ async def test_declarative_error_mapping_and_strict_errors() -> None:
     async def undeclared() -> None:
         raise DomainMissing("gone")
 
-    with pytest.warns(DeprecationWarning):
-        service = RpcService(errors={DomainMissing: MissingError}, strict_errors=True)
+    def mapper(error: Exception) -> RpcError | None:
+        return (
+            MissingError(message=str(error))
+            if isinstance(error, DomainMissing)
+            else None
+        )
+
+    service = RpcService(error_mapper=mapper, strict_errors=True)
     endpoint = service.socket("/mapped", channels=(channel,))
     server = endpoint.create_server()
     declared_response = await server.handle(
