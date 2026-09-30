@@ -20,7 +20,7 @@ from rpckit import (
     RpcChannel,
     RpcConnection,
     RpcDisconnect,
-    RpcErrorContract,
+    RpcErrorBinding,
     RpcReject,
     RpcRejection,
     RpcRejections,
@@ -317,7 +317,7 @@ class JobNotFound(Exception):
     pass
 
 
-job_not_found = RpcErrorContract(
+job_not_found = RpcErrorBinding(
     JobNotFound, message=str, rejection=RpcRejection.NOT_FOUND
 )
 
@@ -356,7 +356,7 @@ async def open_job_session(
 def create_job_service(
     released: list[bool] | None = None,
     *,
-    raises: tuple[RpcErrorContract[Any], ...] = (),
+    rejects: tuple[RpcErrorBinding[Any], ...] = (),
 ) -> RpcService:
     events = RpcChannel("jobs")
 
@@ -385,7 +385,7 @@ def create_job_service(
         yield b"first"
         raise JobNotFound("Job was deleted")
 
-    service = RpcService(raises=raises)
+    service = RpcService(rejects=rejects)
     service.socket(
         "/jobs/{job_id}/events", channels=(events,), name="events", context=JobSession
     )
@@ -397,7 +397,7 @@ def create_job_service(
 def create_job_app(
     service: RpcService,
     *,
-    raises: tuple[RpcErrorContract[Any], ...] = (),
+    rejects: tuple[RpcErrorBinding[Any], ...] = (),
     rejections: RpcRejections | None = None,
 ) -> FastAPI:
     async def resolve(dependency: type) -> JobOutput:
@@ -408,7 +408,7 @@ def create_job_app(
         router,
         context=open_job_session,
         resolver=resolve,
-        raises=raises,
+        rejects=rejects,
         rejections=rejections,
     )
     for name in ("events", "output", "broken"):
@@ -463,7 +463,7 @@ def test_rpc_routes_reject_context_failures_before_accepting(rejections) -> None
 
 
 def test_rpc_routes_reject_context_failures_their_contracts_cover() -> None:
-    web = create_job_app(create_job_service(), raises=(job_not_found,))
+    web = create_job_app(create_job_service(), rejects=(job_not_found,))
 
     with (
         TestClient(web) as client,
@@ -477,7 +477,7 @@ def test_rpc_routes_reject_context_failures_their_contracts_cover() -> None:
 
 def test_rpc_routes_raises_needs_contracts_with_a_rejection() -> None:
     with pytest.raises(ProtocolDefinitionError, match="with a rejection"):
-        RpcRoutes(APIRouter(), raises=(RpcErrorContract(JobNotFound),))
+        RpcRoutes(APIRouter(), rejects=(RpcErrorBinding(JobNotFound),))
 
 
 def test_rpc_routes_reject_raised_rejections_with_their_headers() -> None:
@@ -535,7 +535,7 @@ def test_rpc_routes_close_accepted_streams_with_mapped_rejections() -> None:
 
 def test_rpc_routes_fall_back_to_the_service_contracts() -> None:
     web = create_job_app(
-        create_job_service(raises=(job_not_found,)),
+        create_job_service(rejects=(job_not_found,)),
         rejections={KeyError: RpcRejection.UNAUTHORIZED},
     )
 

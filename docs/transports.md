@@ -113,7 +113,7 @@ router = APIRouter(prefix="/jobs")
 job_routes = RpcRoutes(
     router,
     context=open_job,
-    raises=[job_not_found, job_access_denied],
+    rejects=[job_not_found, job_access_denied],
 )
 job_routes.mount(job_events)
 job_routes.mount(job_output)
@@ -137,10 +137,10 @@ To integrate a DI library, pass an object implementing `FastApiResolver`
 instead: it creates a resolver per WebSocket and may wrap the context function.
 `rpckit.dishka.Dishka` is one such [integration](dependencies.md#dishka).
 
-`raises=` takes [error contracts](errors.md#bind-domain-exceptions) with a
+`rejects=` takes [error bindings](errors.md#bind-domain-exceptions) with a
 `rejection=`, and `rejections=` takes a mapping or callable. Both follow
 [the core rules](connections-and-events.md#map-failures-to-rejections), are
-consulted before the `raises=` of the mounted endpoint and its service, and
+consulted before the `rejects=` of the mounted endpoint and its service, and
 also cover the context function and its dependencies: before acceptance the
 handshake is rejected with an HTTP denial response, after acceptance the
 socket closes with the matching code. Unmapped failures propagate unchanged.

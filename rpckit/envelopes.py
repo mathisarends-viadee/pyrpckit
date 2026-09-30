@@ -26,7 +26,7 @@ class RpcRequestEnvelope(RpcSchema):
     jsonrpc: Literal["2.0"]
     id: RpcRequestId = None
     method: str
-    params: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] | list[Any] = Field(default_factory=dict)
 
     @property
     def expects_response(self) -> bool:

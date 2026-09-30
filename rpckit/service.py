@@ -23,9 +23,7 @@ from rpckit.dependencies import RpcResolverLike, resolver_with_context
 from rpckit.errors import (
     ProtocolDefinitionError,
     RpcError,
-    RpcErrorContract,
-    bind_contracts,
-    contract_of,
+    RpcErrorBinding,
     contract_rejections,
     declared_error,
     rejecting_contracts,
@@ -55,7 +53,7 @@ class RpcEndpoint[ContextT]:
     path_model: type[BaseModel] | None = None
     context: type[ContextT] | None = None
     close_when_events_complete: bool = False
-    raises: tuple[RpcErrorContract[Any], ...] = ()
+    rejects: tuple[RpcErrorBinding[Any], ...] = ()
     _protocol: RpcProtocol | None = field(default=None, init=False, repr=False)
 
     @property
@@ -154,7 +152,7 @@ class RpcStreamEndpoint[ContextT]:
     before_accept: RpcBeforeAccept | None = None
     error_mapper: RpcErrorMapper | None = None
     context: type[ContextT] | None = None
-    raises: tuple[RpcErrorContract[Any], ...] = ()
+    rejects: tuple[RpcErrorBinding[Any], ...] = ()
 
     def match(self, path: str) -> dict[str, str] | None:
         return _match(self.path, path)
@@ -194,7 +192,7 @@ class RpcService:
         limits: RpcLimits | None = None,
         errors: Mapping[type[Exception], type[RpcError]] | None = None,
         strict_errors: bool = False,
-        raises: Sequence[RpcErrorContract[Any]] = (),
+        rejects: Sequence[RpcErrorBinding[Any]] = (),
     ) -> None:
         if not isinstance(version, int) or version < 1:
             raise ProtocolDefinitionError(
@@ -219,7 +217,7 @@ class RpcService:
                 )
             self._errors[exception] = rpc_error
         self._strict_errors = strict_errors
-        self._raises = rejecting_contracts(raises, "RpcService")
+        self._rejects = rejecting_contracts(rejects, "RpcService")
         self._endpoints: list[RpcEndpoint | RpcStreamEndpoint] = []
         self._channels: set[RpcChannel] = set()
         self._mounted_streams: set[FunctionType] = set()
@@ -246,8 +244,8 @@ class RpcService:
         return self._strict_errors
 
     @property
-    def raises(self) -> tuple[RpcErrorContract[Any], ...]:
-        return self._raises
+    def rejects(self) -> tuple[RpcErrorBinding[Any], ...]:
+        return self._rejects
 
     def socket[ContextT](
         self,
@@ -265,7 +263,7 @@ class RpcService:
         path_model: type[BaseModel] | None = None,
         context: type[ContextT] = NoneType,
         close_when_events_complete: bool = False,
-        raises: Sequence[RpcErrorContract[Any]] = (),
+        rejects: Sequence[RpcErrorBinding[Any]] = (),
     ) -> RpcEndpoint[ContextT]:
         self._ensure_mutable()
         variables = _validate_endpoint(self._endpoints, path, name, subprotocol)
@@ -311,7 +309,7 @@ class RpcService:
             path_model,
             None if context is NoneType else context,
             close_when_events_complete,
-            rejecting_contracts(raises, f"RPC socket {path!r}"),
+            rejecting_contracts(rejects, f"RPC socket {path!r}"),
         )
         self._endpoints.append(endpoint)
         self._channels.update(channels)
@@ -331,7 +329,7 @@ class RpcService:
         before_accept: RpcBeforeAccept | None = None,
         error_mapper: RpcErrorMapper | None = None,
         context: type[ContextT] = NoneType,
-        raises: Sequence[RpcErrorContract[Any]] = (),
+        rejects: Sequence[RpcErrorBinding[Any]] = (),
     ) -> RpcStreamEndpoint[ContextT]:
         self._ensure_mutable()
         variables = _validate_endpoint(self._endpoints, path, name, subprotocol)
@@ -365,7 +363,7 @@ class RpcService:
             before_accept,
             error_mapper or self._error_mapper,
             None if context is NoneType else context,
-            rejecting_contracts(raises, f"RPC stream {path!r}"),
+            rejecting_contracts(rejects, f"RPC stream {path!r}"),
         )
         self._endpoints.append(endpoint)
         self._channels.add(channel)
@@ -438,7 +436,12 @@ class RpcService:
                         *protocol.client_methods,
                     ):
                         _unique_name(owners, item.name, channel.name)
-                    for method in (*protocol.methods, *protocol.client_methods):
+                    for method in (
+                        *protocol.methods,
+                        *protocol.client_methods,
+                        *protocol.notifications,
+                        *protocol.subscriptions,
+                    ):
                         for error in method.raises:
                             previous = errors.get(error.code)
                             if previous is not None and previous is not error:
@@ -451,13 +454,6 @@ class RpcService:
                 channel.freeze()
                 _unique_name(owners, endpoint.stream.name, channel.name)
                 streams.append(replace(endpoint.stream, server=endpoint.name))
-        bind_contracts(
-            dict.fromkeys(
-                contract
-                for error in errors.values()
-                if (contract := contract_of(error)) is not None
-            )
-        )
         all_names = set(owners)
         numeric_codes: dict[int, list[str]] = {}
         for error in errors.values():
@@ -569,10 +565,10 @@ class RpcService:
 def endpoint_rejections(
     endpoint: RpcEndpoint[Any] | RpcStreamEndpoint[Any],
 ) -> RpcRejections | None:
-    """The endpoint's ``raises=``, falling back to the service's."""
+    """The endpoint's ``rejects=``, falling back to the service's."""
     return chain_rejections(
-        contract_rejections(endpoint.raises),
-        contract_rejections(endpoint.service.raises),
+        contract_rejections(endpoint.rejects),
+        contract_rejections(endpoint.service.rejects),
     )
 
 

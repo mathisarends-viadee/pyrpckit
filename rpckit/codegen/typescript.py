@@ -342,7 +342,7 @@ class _Renderer:
     def errors(self) -> str:
         named = {
             error.name: error
-            for route in self.ir.operations
+            for route in (*self.ir.operations, *self.ir.notifications)
             for error in route.errors
             if error.name is not None
         }
@@ -761,7 +761,9 @@ def _walk_postorder(
 
 def _named_errors(ir: ClientIr) -> bool:
     return any(
-        error.name is not None for route in ir.operations for error in route.errors
+        error.name is not None
+        for route in (*ir.operations, *ir.notifications)
+        for error in route.errors
     )
 
 

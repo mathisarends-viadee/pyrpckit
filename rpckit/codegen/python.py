@@ -273,6 +273,8 @@ def _render_routes(ir: ClientIr, options: PythonClientOptions) -> str:
             *_model_names(route.result),
         )
     for event in ir.notifications:
+        if event.errors:
+            imports.add(f"{options.package}.errors", "error_from_response")
         imports.add(
             f"{options.package}.models",
             *_model_names(event.message),
@@ -433,7 +435,7 @@ def _render_errors(ir: ClientIr, options: PythonClientOptions) -> str:
     }
     if client_method_codes:
         imports.add("typing", "Self")
-    for route in (*ir.operations, *ir.client_methods):
+    for route in (*ir.operations, *ir.client_methods, *ir.notifications):
         for error in route.errors:
             if error.name is None or error.name in seen:
                 continue
@@ -1185,7 +1187,7 @@ def _named_errors(ir: ClientIr) -> bool:
 
 def _named_error_codes(ir: ClientIr) -> tuple[str, ...]:
     codes: dict[str, None] = {}
-    for route in (*ir.operations, *ir.client_methods):
+    for route in (*ir.operations, *ir.client_methods, *ir.notifications):
         for error in route.errors:
             if error.name is not None:
                 codes.setdefault(error.code, None)

@@ -228,6 +228,7 @@ class NotificationDecl:
     subscription: bool = False
     params_model: str | None = None
     params: tuple[ParamDecl, ...] = ()
+    errors: tuple[ErrorDecl, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,6 +359,9 @@ def _roots(
             if error.data is not None:
                 roots.update(named_types(error.data))
     for notification in notifications:
+        for error in notification.errors:
+            if error.details is not None:
+                roots.update(named_types(error.details))
         roots.update(named_types(notification.payload))
         roots.update(named_types(notification.message))
         if notification.params_model is not None:
@@ -561,6 +565,7 @@ def _notifications(
                 payload=type_expression(notification["payload"]),
                 message=type_expression(notification["message"]),
                 summary=notification.get("summary", ""),
+                errors=tuple(_error(error) for error in notification.get("errors", ())),
                 server=_server_reference(
                     notification,
                     owner=f"Notification {notification['name']!r}",
@@ -592,6 +597,7 @@ def _notifications(
                     owner=f"Subscription {subscription['name']!r}",
                 ),
                 subscription=True,
+                errors=tuple(_error(error) for error in subscription.get("errors", ())),
                 params_model=params_model,
                 params=tuple(
                     _parameter(

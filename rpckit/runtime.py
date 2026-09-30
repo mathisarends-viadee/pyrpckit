@@ -31,7 +31,14 @@ from rpckit.dependencies import (
     context_values,
 )
 from rpckit.envelopes import RpcNotification, RpcRequestEnvelope
-from rpckit.errors import RpcError, RpcParseError
+from rpckit.errors import (
+    RpcError,
+    RpcInternalError,
+    RpcParseError,
+    bind_contracts,
+    contract_for,
+    contract_of,
+)
 from rpckit.observer import RpcConnectionContext, notify_observer
 from rpckit.server import RpcErrorMapper, RpcServer, _request_id
 from rpckit.service import RpcEndpoint, RpcStreamEndpoint
@@ -187,6 +194,7 @@ async def serve_endpoint(
                 scoped,
                 send_outgoing,
                 limit=limits.max_subscriptions,
+                server=server,
                 observer=endpoint.observer,
             )
 
@@ -291,6 +299,7 @@ async def serve_endpoint(
                                 send_outgoing,
                                 endpoint.observer,
                                 rejections,
+                                server,
                             )
                             for event in endpoint.protocol.notifications
                         )
@@ -381,7 +390,7 @@ def _is_notification(message: object) -> bool:
     return isinstance(message, dict) and "id" not in message
 
 
-async def _event_source(event, resolver, send, observer, rejections=None):
+async def _event_source(event, resolver, send, observer, rejections, server):
     try:
         arguments = {
             parameter.name: await resolver.resolve(parameter.dependency)
@@ -409,9 +418,35 @@ async def _event_source(event, resolver, send, observer, rejections=None):
     except asyncio.CancelledError:
         raise
     except Exception as error:
-        if event.on_error == "close" or _rejection(error, rejections) is not None:
-            raise
-        logger.exception("RPC event source %s failed", event.name)
+        binding = contract_for(
+            error,
+            bind_contracts(
+                binding
+                for declared in event.raises
+                if (binding := contract_of(declared)) is not None
+            ),
+        )
+        if binding is not None:
+            try:
+                rejected = binding.reject(error)
+            except Exception:
+                logger.exception("RPC event error binding failed for %s", event.name)
+                raise RpcReject(
+                    RpcRejection.INTERNAL_ERROR, "Internal error"
+                ) from error
+            if rejected is not None:
+                raise rejected from error
+        rejected = _rejection(error, rejections)
+        if rejected is not None:
+            raise rejected from error
+        mapped = server._rpc_error(error, event.name, declared=event.raises)
+        if event.on_error == "close":
+            rejection = (
+                RpcRejection.INTERNAL_ERROR
+                if isinstance(mapped, RpcInternalError)
+                else RpcRejection.FORBIDDEN
+            )
+            raise RpcReject(rejection, mapped.message) from error
 
 
 async def serve_stream_endpoint(

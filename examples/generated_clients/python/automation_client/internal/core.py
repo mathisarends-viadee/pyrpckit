@@ -11,6 +11,7 @@ from pydantic import BaseModel, ValidationError
 
 from .errors import (
     RpcNotificationValidationError,
+    RpcRemoteError,
     RpcResponseValidationError,
     RpcTransportError,
 )
@@ -238,7 +239,25 @@ class RpcClientCore:
                     if values.get("complete") is True:
                         return
                     if "error" in values:
-                        raise RpcTransportError(str(values["error"]))
+                        error = values["error"]
+                        if (
+                            not isinstance(error, dict)
+                            or not isinstance(error.get("code"), int)
+                            or not isinstance(error.get("message"), str)
+                        ):
+                            raise RpcTransportError("Invalid subscription error")
+                        data = error.get("data", {})
+                        if not isinstance(data, dict) or not isinstance(
+                            data.get("code"), str
+                        ):
+                            raise RpcTransportError("Invalid subscription error data")
+                        factory = notification.error_mapper or RpcRemoteError
+                        raise factory(
+                            error["code"],
+                            data["code"],
+                            error["message"],
+                            data.get("details"),
+                        )
                     if "payload" not in values:
                         raise RpcTransportError(
                             "Subscription notification has no payload"

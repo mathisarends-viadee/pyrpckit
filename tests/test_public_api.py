@@ -42,5 +42,11 @@ def test_test_helpers_are_distributed() -> None:
 
 
 def test_public_signature_types_are_exported() -> None:
-    for name in ("RpcResolverLike", "RpcResponseMessage", "RpcProtocol"):
+    for name in (
+        "RpcResolverLike",
+        "RpcResponseMessage",
+        "RpcProtocol",
+        "RpcErrorBinding",
+        "RpcErrorDeclaration",
+    ):
         assert name in rpckit.__all__

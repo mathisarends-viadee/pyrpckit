@@ -142,7 +142,7 @@ session_routes = RpcRoutes(
     router,
     context=open_session,
     resolver=Dishka(),
-    raises=[session_not_found],
+    rejects=[session_not_found],
 )
 session_routes.mount(screencast)
 session_routes.mount(events)

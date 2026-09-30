@@ -28,6 +28,15 @@ def _server(handler: GreetingState) -> RpcServer:
     return greeting_app.create_server(resolver=TestResolver(handler))
 
 
+@pytest.mark.parametrize("params", [[], ["M"], [1, 2]])
+async def test_positional_params_are_invalid_params(handler, params) -> None:
+    response = await _server(handler).handle(
+        {"jsonrpc": "2.0", "id": 7, "method": GreetingRpcMethod.SAY, "params": params}
+    )
+    assert response.error.code == RpcErrorCode.INVALID_PARAMS
+    assert response.id == 7
+
+
 async def test_a_request_is_answered_with_its_result(
     handler: GreetingState,
 ) -> None:

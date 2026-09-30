@@ -34,8 +34,8 @@ from .envelopes import RpcFailure, RpcNotification, RpcRequestId, RpcSuccess
 from .errors import (
     ProtocolDefinitionError,
     RpcError,
+    RpcErrorBinding,
     RpcErrorCode,
-    RpcErrorContract,
     RpcErrorDeclaration,
     RpcInternalError,
     RpcInvalidParamsError,
@@ -91,7 +91,7 @@ __all__ = [
     "RpcEndpoint",
     "RpcError",
     "RpcErrorCode",
-    "RpcErrorContract",
+    "RpcErrorBinding",
     "RpcErrorDeclaration",
     "RpcErrorMapper",
     "RpcFailure",

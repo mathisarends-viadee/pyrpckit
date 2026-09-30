@@ -73,8 +73,10 @@ class RpcDispatcher:
 
 def _validated_params(
     method: RpcMethodDefinition,
-    raw_params: dict[str, Any],
+    raw_params: dict[str, Any] | list[Any],
 ) -> BaseModel | None:
+    if isinstance(raw_params, list):
+        raise RpcInvalidParamsError(message="RPC methods require named params")
     if method.params is None:
         if raw_params:
             raise RpcInvalidParamsError(

@@ -1,9 +1,11 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
 from pydantic import BaseModel, TypeAdapter
+
+from .errors import RpcRemoteError
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +28,7 @@ class RpcNotificationInfo[PayloadT]:
     message_adapter: TypeAdapter[Any]
     payload_adapter: TypeAdapter[PayloadT]
     server: str | None = None
+    error_mapper: Callable[[int, str, str, Any], RpcRemoteError] | None = None
 
 
 @dataclass(frozen=True, slots=True)

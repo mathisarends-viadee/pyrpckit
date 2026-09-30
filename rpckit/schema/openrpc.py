@@ -51,6 +51,11 @@ def render_openrpc(
                         "name": notification.name,
                         "payload": _ref(type_name(notification.payload)),
                         "message": _ref(notification_schema_name(notification.name)),
+                        **(
+                            {"errors": [_error(error) for error in notification.raises]}
+                            if notification.raises
+                            else {}
+                        ),
                     },
                     notification.server,
                     server_lookup,
@@ -72,6 +77,11 @@ def render_openrpc(
                             else None
                         ),
                         "payload": _ref(type_name(subscription.payload)),
+                        **(
+                            {"errors": [_error(error) for error in subscription.raises]}
+                            if subscription.raises
+                            else {}
+                        ),
                     },
                     subscription.server,
                     server_lookup,

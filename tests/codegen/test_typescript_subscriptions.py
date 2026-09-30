@@ -6,7 +6,7 @@ from textwrap import dedent
 
 import pytest
 
-from rpckit import RpcChannel, RpcModel, RpcService
+from rpckit import RpcChannel, RpcErrorBinding, RpcModel, RpcService
 from rpckit.codegen import generate_typescript_client
 from rpckit.codegen.typescript import TypeScriptClientOptions
 
@@ -19,6 +19,11 @@ class SessionEvent(RpcModel):
     value: str
 
 
+class SessionMissing(Exception):
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+
+
 def test_generated_typescript_subscription(tmp_path: Path) -> None:
     npx = shutil.which("npx.cmd") or shutil.which("npx")
     node = shutil.which("node.exe") or shutil.which("node")
@@ -26,7 +31,9 @@ def test_generated_typescript_subscription(tmp_path: Path) -> None:
         pytest.skip("Node.js and npx are required")
     channel = RpcChannel("session")
 
-    @channel.server.subscription()
+    @channel.server.subscription(
+        raises=[RpcErrorBinding(SessionMissing, details=SessionParams)]
+    )
     async def events(params: SessionParams) -> AsyncIterator[SessionEvent]:
         yield SessionEvent(value=params.session_id)
 
@@ -44,7 +51,7 @@ def test_generated_typescript_subscription(tmp_path: Path) -> None:
             npx,
             "prettier",
             "--check",
-            str(tmp_path / "generated/namespaces/session.ts"),
+            str(tmp_path / "generated"),
         ],
         capture_output=True,
         text=True,
@@ -55,7 +62,7 @@ def test_generated_typescript_subscription(tmp_path: Path) -> None:
     runner.write_text(
         dedent(
             """
-            import { SessionClient } from "./generated";
+            import { SessionClient, SessionMissingError } from "./generated";
 
             let notify: ((value: unknown) => void) | undefined;
             let unsubscribed = false;
@@ -92,6 +99,45 @@ def test_generated_typescript_subscription(tmp_path: Path) -> None:
               }
               if (!unsubscribed) throw new Error("unsubscribe was not sent");
               await client.close();
+
+              const failingTransport = {
+                async request(method: string): Promise<unknown> {
+                  return method.endsWith(".subscribe") ? { subscriptionId: "1" } : null;
+                },
+                async *notifications(): AsyncIterable<unknown> {
+                  await new Promise((resolve) => setTimeout(resolve, 0));
+                  yield {
+                    method: "session.events",
+                    params: {
+                      subscriptionId: "1", complete: false,
+                      error: {
+                        code: -32000, message: "Session missing",
+                        data: {
+                          code: "session_missing", details: { sessionId: "abc" },
+                        },
+                      },
+                    },
+                  };
+                },
+                async close(): Promise<void> {},
+              };
+              const failingClient = SessionClient.withTransports(failingTransport);
+              let caught = false;
+              try {
+                const stream = failingClient.session.events({ sessionId: "abc" });
+                for await (const event of stream) {
+                  throw new Error(`unexpected event: ${event.value}`);
+                }
+              } catch (error) {
+                if (!(error instanceof SessionMissingError)) throw error;
+                if (error.details.sessionId !== "abc") {
+                  throw new Error("wrong error details");
+                }
+                caught = true;
+              } finally {
+                await failingClient.close();
+              }
+              if (!caught) throw new Error("missing subscription failure");
 
               type Listener = (...args: any[]) => void;
               class FakeSocket {

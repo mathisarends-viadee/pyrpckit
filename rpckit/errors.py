@@ -190,7 +190,7 @@ def error_message(code: str | int) -> str:
 
 
 def declared_error(error: Any) -> type[RpcError]:
-    if isinstance(error, RpcErrorContract):
+    if isinstance(error, RpcErrorBinding):
         return error.error
     if not (isinstance(error, type) and issubclass(error, RpcError)):
         raise ProtocolDefinitionError(
@@ -203,7 +203,7 @@ def declared_error(error: Any) -> type[RpcError]:
     return error
 
 
-class RpcErrorContract[ExceptionT: Exception]:
+class RpcErrorBinding[ExceptionT: Exception]:
     """Bind a domain exception to the RPC error and rejection it becomes."""
 
     __slots__ = ("_details", "_message", "error", "exception", "rejection")
@@ -225,7 +225,7 @@ class RpcErrorContract[ExceptionT: Exception]:
             or issubclass(exception, RpcError)
         ):
             raise ProtocolDefinitionError(
-                "RpcErrorContract binds an Exception subclass that is not an "
+                "RpcErrorBinding binds an Exception subclass that is not an "
                 f"RpcError, got {exception!r}"
             )
         if (
@@ -241,14 +241,17 @@ class RpcErrorContract[ExceptionT: Exception]:
                 "RPC error contract rejection must be an RpcRejection"
             )
         code = _error_code(exception.__name__) if code is None else code
-        name = "".join(part.capitalize() for part in str(code).split("_")) + "Error"
+        name = "".join(part.capitalize() for part in str(code).split("_")) + "RpcError"
+        details_type = _details_type(details)
+        if isinstance(details, type) and details_type is not None:
+            _check_details_fields(exception, details_type)
         namespace: dict[str, Any] = {
             "__module__": exception.__module__,
             "__qualname__": name,
             "__rpckit_contract__": self,
             "code": code,
             "rpc_code": rpc_code,
-            "details_type": _details_type(details),
+            "details_type": details_type,
         }
         if isinstance(message, str):
             namespace["message"] = message
@@ -263,21 +266,34 @@ class RpcErrorContract[ExceptionT: Exception]:
         return self.error.code
 
     def __repr__(self) -> str:
-        return f"RpcErrorContract({self.exception.__name__}, code={self.code!r})"
+        return f"RpcErrorBinding({self.exception.__name__}, code={self.code!r})"
 
     def message_for(self, error: ExceptionT) -> str:
         if callable(self._message):
-            return self._message(error)
+            message = self._message(error)
+            if not isinstance(message, str):
+                raise TypeError("RPC error binding message must return a string")
+            return message
         return self.error.message
 
     def to_error(self, error: ExceptionT) -> RpcError:
         """Build the RPC error that answers a call failing with ``error``."""
+        if not isinstance(error, self.exception):
+            raise TypeError(
+                f"Expected {self.exception.__name__}, got {type(error).__name__}"
+            )
         details = self._details
         if isinstance(details, type):
-            data = details.model_validate(error, from_attributes=True)
+            data = details.model_validate(
+                error, from_attributes=True, by_name=True, by_alias=False
+            )
         else:
             data = None if details is None else details(error)
         return self.error(data, message=self.message_for(error))
+
+    def check(self, error: ExceptionT) -> None:
+        """Validate the details and message of a representative exception."""
+        self.to_error(error)
 
     def reject(self, error: ExceptionT) -> RpcReject | None:
         """Build the rejection for a connection failing with ``error``."""
@@ -286,7 +302,35 @@ class RpcErrorContract[ExceptionT: Exception]:
         return RpcReject(self.rejection, self.message_for(error))
 
 
-type RpcErrorDeclaration = type[RpcError] | RpcErrorContract[Any]
+type RpcErrorDeclaration = type[RpcError] | RpcErrorBinding[Any]
+
+
+def _check_details_fields(exception: type[Exception], details: type[BaseModel]) -> None:
+    attributes = set().union(
+        *(getattr(cls, "__annotations__", {}) for cls in exception.__mro__)
+    )
+    attributes.update(name for cls in exception.__mro__ for name in vars(cls))
+    with suppress(TypeError, ValueError):
+        attributes.update(
+            name
+            for name, parameter in inspect.signature(
+                exception.__init__
+            ).parameters.items()
+            if name != "self"
+            and parameter.kind
+            not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        )
+    missing = [
+        name
+        for name, field in details.model_fields.items()
+        if field.is_required() and name not in attributes
+    ]
+    if missing:
+        raise ProtocolDefinitionError(
+            f"RPC error binding details {details.__name__} fields {missing!r} "
+            f"are absent from {exception.__name__} annotations and init parameters; "
+            "use an annotated details function for custom mappings"
+        )
 
 
 def _details_type(details: object) -> type[BaseModel] | None:
@@ -307,35 +351,35 @@ def _details_type(details: object) -> type[BaseModel] | None:
 
 def warn_errors_mapping() -> None:
     warnings.warn(
-        "errors= is deprecated; bind domain exceptions with RpcErrorContract "
+        "errors= is deprecated; bind domain exceptions with RpcErrorBinding "
         "and declare them in raises=",
         DeprecationWarning,
         stacklevel=3,
     )
 
 
-def contract_of(error: type[RpcError]) -> RpcErrorContract[Any] | None:
+def contract_of(error: type[RpcError]) -> RpcErrorBinding[Any] | None:
     return error.__dict__.get("__rpckit_contract__")
 
 
 def bind_contracts(
-    contracts: Iterable[RpcErrorContract[Any]],
-) -> dict[type[Exception], RpcErrorContract[Any]]:
-    """Index contracts by exception; an exception binds to one contract."""
-    bound: dict[type[Exception], RpcErrorContract[Any]] = {}
+    contracts: Iterable[RpcErrorBinding[Any]],
+) -> dict[type[Exception], RpcErrorBinding[Any]]:
+    """Index bindings within one operation or rejection level."""
+    bound: dict[type[Exception], RpcErrorBinding[Any]] = {}
     for contract in contracts:
         previous = bound.setdefault(contract.exception, contract)
         if previous is not contract:
             raise ProtocolDefinitionError(
-                f"{contract.exception.__name__} is bound to RPC error contracts "
+                f"{contract.exception.__name__} is bound to RPC error bindings "
                 f"{previous.code!r} and {contract.code!r}"
             )
     return bound
 
 
 def contract_for(
-    error: Exception, contracts: Mapping[type[Exception], RpcErrorContract[Any]]
-) -> RpcErrorContract[Any] | None:
+    error: Exception, contracts: Mapping[type[Exception], RpcErrorBinding[Any]]
+) -> RpcErrorBinding[Any] | None:
     """Find the contract bound to the most specific class of ``error``."""
     return next(
         (contracts[cls] for cls in type(error).__mro__ if cls in contracts), None
@@ -343,14 +387,14 @@ def contract_for(
 
 
 def rejecting_contracts(
-    raises: Iterable[object], owner: str
-) -> tuple[RpcErrorContract[Any], ...]:
-    """Validate the ``raises=`` of a connection: contracts with a rejection."""
-    contracts: list[RpcErrorContract[Any]] = []
-    for contract in dict.fromkeys(raises):
-        if not isinstance(contract, RpcErrorContract) or contract.rejection is None:
+    rejects: Iterable[object], owner: str
+) -> tuple[RpcErrorBinding[Any], ...]:
+    """Validate the ``rejects=`` of a connection: bindings with a rejection."""
+    contracts: list[RpcErrorBinding[Any]] = []
+    for contract in dict.fromkeys(rejects):
+        if not isinstance(contract, RpcErrorBinding) or contract.rejection is None:
             raise ProtocolDefinitionError(
-                f"{owner} raises= takes RpcErrorContract values with a rejection, "
+                f"{owner} rejects= takes RpcErrorBinding values with a rejection, "
                 f"got {contract!r}"
             )
         contracts.append(contract)
@@ -359,7 +403,7 @@ def rejecting_contracts(
 
 
 def contract_rejections(
-    contracts: Iterable[RpcErrorContract[Any]],
+    contracts: Iterable[RpcErrorBinding[Any]],
 ) -> RpcRejectionMapper | None:
     bound = bind_contracts(contracts)
     if not bound:

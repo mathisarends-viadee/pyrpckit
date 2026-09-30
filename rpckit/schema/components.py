@@ -91,7 +91,12 @@ def _annotations(protocol: RpcProtocol) -> dict[str, Any]:
         if client_method.params is not None:
             _add(annotations, client_method.params)
         _add_result_types(annotations, client_method.result)
-    for method in (*protocol.methods, *protocol.client_methods):
+    for method in (
+        *protocol.methods,
+        *protocol.client_methods,
+        *protocol.notifications,
+        *protocol.subscriptions,
+    ):
         for error in method.raises:
             if error.details_type is not None:
                 _add(annotations, error.details_type)

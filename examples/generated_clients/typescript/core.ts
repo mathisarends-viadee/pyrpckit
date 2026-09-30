@@ -23,6 +23,12 @@ export type RpcRouteInfo<
 > = {
   readonly method: string;
   readonly server?: string;
+  readonly errorMapper?: (
+    rpcCode: number,
+    code: string,
+    message: string,
+    details?: unknown,
+  ) => RpcRemoteError;
   readonly [routeTypes]?: readonly [Params, Result];
 };
 
@@ -412,7 +418,40 @@ export class RpcClientCore {
           )
             continue;
           if ("complete" in values && values.complete === true) return;
-          if ("error" in values) throw new Error(String(values.error));
+          if ("error" in values) {
+            const error = values.error;
+            if (
+              typeof error !== "object" ||
+              error === null ||
+              !("code" in error) ||
+              typeof error.code !== "number" ||
+              !("message" in error) ||
+              typeof error.message !== "string" ||
+              !("data" in error) ||
+              typeof error.data !== "object" ||
+              error.data === null ||
+              !("code" in error.data) ||
+              typeof error.data.code !== "string"
+            ) {
+              throw new Error("Invalid subscription error");
+            }
+            const details =
+              "details" in error.data ? error.data.details : undefined;
+            if (route.errorMapper !== undefined) {
+              throw route.errorMapper(
+                error.code,
+                error.data.code,
+                error.message,
+                details,
+              );
+            }
+            throw new RpcRemoteError(
+              error.code,
+              error.data.code,
+              error.message,
+              details,
+            );
+          }
           if (!("payload" in values)) {
             throw new Error("Subscription notification has no payload");
           }

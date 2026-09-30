@@ -7,8 +7,8 @@ from rpckit import (
     ProtocolDefinitionError,
     RpcChannel,
     RpcError,
+    RpcErrorBinding,
     RpcErrorCode,
-    RpcErrorContract,
     RpcInvalidParamsError,
     RpcModel,
     RpcRejection,
@@ -135,10 +135,10 @@ def lock_details(error: TaskLocked) -> LockDetails:
     return LockDetails(locked_by=error.owner)
 
 
-task_not_found = RpcErrorContract(
+task_not_found = RpcErrorBinding(
     TaskNotFound, details=TaskRef, rejection=RpcRejection.NOT_FOUND
 )
-task_locked = RpcErrorContract(
+task_locked = RpcErrorBinding(
     TaskLocked,
     code="task_locked",
     message=lambda error: f"Locked by {error.owner}",
@@ -180,7 +180,7 @@ def test_contract_metadata_is_derived_like_rpc_errors() -> None:
     assert task_not_found.error.rpc_code == RpcErrorCode.SERVER_ERROR
     assert task_not_found.error.details_type is TaskRef
     assert task_locked.error.details_type is LockDetails
-    assert task_locked.error.__name__ == "TaskLockedError"
+    assert task_locked.error.__name__ == "TaskLockedRpcError"
 
 
 async def test_contracts_answer_the_domain_exceptions_they_bind() -> None:
@@ -198,16 +198,20 @@ async def test_contracts_answer_the_domain_exceptions_they_bind() -> None:
     assert locked.error.data.details == LockDetails(locked_by="ada")
 
 
-async def test_strict_errors_need_the_contract_on_the_method() -> None:
+async def test_bindings_are_always_scoped_to_the_method(caplog) -> None:
     lenient = await _call(_task_service(), "tasks.lock", 2)
     strict = await _call(_task_service(strict_errors=True), "tasks.lock", 2)
 
-    assert lenient.error.data.code == "task_locked"
+    assert lenient.error.code == RpcErrorCode.INTERNAL_ERROR
     assert strict.error.code == RpcErrorCode.INTERNAL_ERROR
+    assert "tasks.lock failed" in caplog.text
 
 
 async def test_a_failing_contract_becomes_an_internal_error(caplog) -> None:
-    broken = RpcErrorContract(TaskLocked, details=TaskRef)
+    def broken_details(error: TaskLocked) -> TaskRef:
+        raise ValueError("bad details")
+
+    broken = RpcErrorBinding(TaskLocked, details=broken_details)
     tasks = RpcChannel("tasks")
 
     @tasks.server.method(raises=[broken])
@@ -248,19 +252,152 @@ def test_contracts_are_described_like_rpc_errors() -> None:
     ]
 
 
-def test_an_exception_binds_to_one_contract_per_service() -> None:
+async def test_an_exception_can_have_different_bindings_per_method() -> None:
     tasks = RpcChannel("tasks")
 
     @tasks.server.method(raises=[task_not_found])
-    async def read() -> None: ...
+    async def read() -> None:
+        raise TaskNotFound(1)
 
-    @tasks.server.method(raises=[RpcErrorContract(TaskNotFound, code="gone")])
-    async def delete() -> None: ...
+    @tasks.server.method(raises=[RpcErrorBinding(TaskNotFound, code="gone")])
+    async def delete() -> None:
+        raise TaskNotFound(1)
 
     service = RpcService()
     service.socket("/tasks", channels=(tasks,))
-    with pytest.raises(ProtocolDefinitionError, match="bound to RPC error contracts"):
-        service.freeze()
+    service.freeze()
+    server = service.endpoint("tasks").create_server()
+    for name, code in [("read", "task_not_found"), ("delete", "gone")]:
+        result = await server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": f"tasks.{name}"}
+        )
+        assert result.error.data.code == code
+
+
+def test_ambiguous_bindings_on_one_method_are_rejected() -> None:
+    channel = RpcChannel("tasks", raises=[task_not_found])
+
+    @channel.server.method(raises=[RpcErrorBinding(TaskNotFound, code="gone")])
+    async def read() -> None: ...
+
+    with pytest.raises(ProtocolDefinitionError, match="bound to RPC error bindings"):
+        channel.freeze()
+
+
+def test_details_fields_are_checked_at_definition() -> None:
+    with pytest.raises(ProtocolDefinitionError, match=r"task_id.*TaskLocked"):
+        RpcErrorBinding(TaskLocked, details=TaskRef)
+
+
+def test_binding_check_validates_runtime_attributes_and_message() -> None:
+    task_not_found.check(TaskNotFound(1))
+    task_locked.check(TaskLocked("ada"))
+    error = TaskNotFound(1)
+    error.task_id = "invalid"
+    with pytest.raises(ValidationError):
+        task_not_found.check(error)
+    with pytest.raises(TypeError, match="Expected TaskNotFound"):
+        task_not_found.check(TaskLocked("ada"))
+    broken = RpcErrorBinding(TaskNotFound, message=lambda error: None)
+    with pytest.raises(TypeError, match="message must return a string"):
+        broken.check(TaskNotFound(1))
+
+
+def test_generated_binding_error_does_not_collide_with_domain_exception() -> None:
+    class TaskNotFoundError(Exception):
+        pass
+
+    binding = RpcErrorBinding(TaskNotFoundError)
+    assert binding.error.__name__ == "TaskNotFoundRpcError"
+    assert binding.error.__name__ != TaskNotFoundError.__name__
+
+
+async def test_strict_errors_accept_subclasses_of_declared_rpc_errors() -> None:
+    class MissingError(RpcError):
+        pass
+
+    class MissingChildError(MissingError):
+        pass
+
+    channel = RpcChannel("tasks")
+
+    @channel.server.method(raises=[MissingError])
+    async def read() -> None:
+        raise MissingChildError()
+
+    response = await channel.create_server(strict_errors=True).handle(
+        {"jsonrpc": "2.0", "id": 1, "method": "tasks.read"}
+    )
+    assert response.error.data.code == MissingChildError.code
+
+
+@pytest.mark.parametrize("notification", [False, True])
+async def test_failing_error_mapper_is_logged_and_contained(
+    caplog, notification
+) -> None:
+    channel = RpcChannel("tasks")
+
+    @channel.server.method()
+    async def read() -> None:
+        raise ValueError("private failure")
+
+    def mapper(error: Exception) -> RpcError | None:
+        raise RuntimeError("mapper failure")
+
+    request = {"jsonrpc": "2.0", "method": "tasks.read"}
+    if not notification:
+        request["id"] = 1
+    result = await channel.create_server(error_mapper=mapper).handle(request)
+    if notification:
+        assert result is None
+    else:
+        assert result.error.data.code == "internal_error"
+        assert result.error.message == "Internal error"
+    assert "RPC error mapper failed" in caplog.text
+
+
+async def test_channels_can_bind_permission_error_differently() -> None:
+    service = RpcService()
+    channels = []
+    for name, code in [("tasks", "task_denied"), ("users", "user_denied")]:
+        channel = RpcChannel(name, raises=[RpcErrorBinding(PermissionError, code=code)])
+
+        @channel.server.method()
+        async def read() -> None:
+            raise PermissionError("private")
+
+        channels.append(channel)
+    endpoint = service.socket("/rpc", channels=channels)
+    service.freeze()
+    server = endpoint.create_server()
+    for name, code in [("tasks", "task_denied"), ("users", "user_denied")]:
+        response = await server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": f"{name}.read"}
+        )
+        assert response.error.data.code == code
+
+
+def test_details_support_annotated_attributes_properties_and_defaults() -> None:
+    class Details(RpcModel):
+        task_id: int
+        kind: str = "task"
+
+    class Missing(Exception):
+        task_id: int
+
+        def __init__(self, value: int) -> None:
+            self.task_id = value
+
+    binding = RpcErrorBinding(Missing, details=Details)
+    binding.check(Missing(1))
+    assert binding.to_error(Missing(1)).details == Details(task_id=1)
+
+    class WithProperty(Exception):
+        @property
+        def task_id(self) -> int:
+            return 1
+
+    RpcErrorBinding(WithProperty, details=TaskRef).check(WithProperty())
 
 
 @pytest.mark.parametrize(
@@ -278,7 +415,7 @@ def test_an_exception_binds_to_one_contract_per_service() -> None:
 def test_invalid_contracts_are_rejected(arguments) -> None:
     exception = arguments.pop("exception")
     with pytest.raises(ProtocolDefinitionError):
-        RpcErrorContract(exception, **arguments)
+        RpcErrorBinding(exception, **arguments)
 
 
 def test_client_methods_declare_rpc_errors_only() -> None:
@@ -287,5 +424,5 @@ def test_client_methods_declare_rpc_errors_only() -> None:
 
 
 def test_errors_mapping_is_deprecated() -> None:
-    with pytest.warns(DeprecationWarning, match="RpcErrorContract"):
+    with pytest.warns(DeprecationWarning, match="RpcErrorBinding"):
         RpcService(errors={TaskNotFound: HTTPTimeoutError})

@@ -1,5 +1,6 @@
 import { defineNotification, defineRoute } from "./core";
-{% if model_import %}{{ model_import }}
+{% if notifications | selectattr("errors") | list %}import { errorFromResponse } from "./errors";
+{% endif %}{% if model_import %}{{ model_import }}
 {% endif %}
 {% if routes %}
 export const routes = {
@@ -12,7 +13,8 @@ export const routes = {
 export const notifications = {
 {% for event in notifications %}  {{ event | route_key }}: defineNotification<{{ event.payload | type }}>({
     method: {{ event.rpc_name | literal }},
-{% if event.server is not none %}    server: {{ event.server | literal }},
+{% if event.errors %}    errorMapper: errorFromResponse,
+{% endif %}{% if event.server is not none %}    server: {{ event.server | literal }},
 {% endif %}  }),
 {% endfor %}} as const;
 {% endif %}

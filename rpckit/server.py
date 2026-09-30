@@ -61,14 +61,6 @@ class RpcServer:
         server._codec = RpcCodec()
         server._limits = limits or RpcLimits()
         server._semaphore = asyncio.Semaphore(server._limits.max_concurrency)
-        server._contracts = bind_contracts(
-            dict.fromkeys(
-                contract
-                for method in protocol.methods
-                for error in method.raises
-                if (contract := contract_of(error)) is not None
-            )
-        )
         server._errors = dict(errors or {})
         server._strict_errors = strict_errors
         return server
@@ -174,7 +166,16 @@ class RpcServer:
     ) -> RpcError:
         if isinstance(error, RpcError):
             mapped = error
-        elif (contract := contract_for(error, self._contracts)) is not None:
+        elif (
+            contract := contract_for(
+                error,
+                bind_contracts(
+                    contract
+                    for declared_error in declared
+                    if (contract := contract_of(declared_error)) is not None
+                ),
+            )
+        ) is not None:
             try:
                 mapped = contract.to_error(error)
             except Exception:
@@ -183,22 +184,28 @@ class RpcServer:
                 )
                 return RpcInternalError()
         else:
-            mapped = next(
-                (
-                    rpc_error(message=str(error))
-                    for exception, rpc_error in self._errors.items()
-                    if isinstance(error, exception)
-                ),
-                None,
-            )
-        if mapped is None and self._error_mapper is not None:
-            mapped = self._error_mapper(error)
+            try:
+                mapped = next(
+                    (
+                        rpc_error(message=str(error))
+                        for exception, rpc_error in self._errors.items()
+                        if isinstance(error, exception)
+                    ),
+                    None,
+                )
+                if mapped is None and self._error_mapper is not None:
+                    mapped = self._error_mapper(error)
+                if mapped is not None and not isinstance(mapped, RpcError):
+                    raise TypeError("RPC error mapper must return RpcError or None")
+            except Exception:
+                logger.exception("RPC error mapper failed for method %s", method)
+                return RpcInternalError()
         if mapped is not None:
             if (
                 self._strict_errors
                 and method is not None
                 and not mapped._builtin
-                and type(mapped) not in declared
+                and not isinstance(mapped, declared)
             ):
                 logger.error(
                     "RPC method %s raised undeclared error %s",

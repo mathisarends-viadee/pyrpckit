@@ -18,7 +18,7 @@ from rpckit.dependencies import (
 from rpckit.errors import (
     ProtocolDefinitionError,
     RpcError,
-    RpcErrorContract,
+    RpcErrorBinding,
     RpcErrorDeclaration,
     declared_error,
     warn_errors_mapping,
@@ -335,6 +335,7 @@ class RpcServerSide:
         payload: Any = None,
         summary: str | None = None,
         on_error: str = "continue",
+        raises: Iterable[RpcErrorDeclaration] = (),
     ) -> Callable[[FunctionType], FunctionType]: ...
 
     def event(
@@ -345,6 +346,7 @@ class RpcServerSide:
         payload: Any = None,
         summary: str | None = None,
         on_error: str = "continue",
+        raises: Iterable[RpcErrorDeclaration] = (),
     ) -> Any:
         channel = self._channel
         channel._ensure_mutable()
@@ -358,6 +360,9 @@ class RpcServerSide:
             raise ProtocolDefinitionError(
                 "RPC event decorator expects a function or name"
             )
+        merged_raises = tuple(
+            dict.fromkeys((*channel.raises, *(declared_error(e) for e in raises)))
+        )
 
         def decorate(function: FunctionType) -> FunctionType:
             channel._validate_function(function, "event", coroutine=False)
@@ -371,6 +376,7 @@ class RpcServerSide:
                 summary=summary or _docstring_summary(function),
                 server=None,
                 on_error=on_error,
+                raises=merged_raises,
             )
             channel._reserve(wire_name)
             channel._events.append(definition)
@@ -383,11 +389,21 @@ class RpcServerSide:
 
     @overload
     def subscription(
-        self, name: str | None = None, /, *, summary: str | None = None
+        self,
+        name: str | None = None,
+        /,
+        *,
+        summary: str | None = None,
+        raises: Iterable[RpcErrorDeclaration] = (),
     ) -> Callable[[FunctionType], FunctionType]: ...
 
     def subscription(
-        self, name: str | FunctionType | None = None, /, *, summary: str | None = None
+        self,
+        name: str | FunctionType | None = None,
+        /,
+        *,
+        summary: str | None = None,
+        raises: Iterable[RpcErrorDeclaration] = (),
     ) -> Any:
         channel = self._channel
         channel._ensure_mutable()
@@ -397,6 +413,9 @@ class RpcServerSide:
             raise ProtocolDefinitionError(
                 "RPC subscription decorator expects a function or name"
             )
+        merged_raises = tuple(
+            dict.fromkeys((*channel.raises, *(declared_error(e) for e in raises)))
+        )
 
         def decorate(function: FunctionType) -> FunctionType:
             channel._validate_function(function, "subscription", coroutine=False)
@@ -409,6 +428,7 @@ class RpcServerSide:
                 function=function,
                 summary=summary or _docstring_summary(function),
                 resolver_scope=channel.resolver_scope,
+                raises=merged_raises,
             )
             channel._reserve(wire_name)
             channel._subscriptions.append(definition)
@@ -497,7 +517,7 @@ class RpcClientSide:
         channel._ensure_mutable()
         wire_name = join_rpc_name(channel.namespace, _name(name, "client method name"))
         raises = tuple(raises)
-        if any(isinstance(error, RpcErrorContract) for error in raises):
+        if any(isinstance(error, RpcErrorBinding) for error in raises):
             raise ProtocolDefinitionError(
                 "Client methods declare RpcError subclasses: the server receives "
                 "these errors and cannot rebuild a domain exception from them"

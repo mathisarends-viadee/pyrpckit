@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 from rpckit._adapter import adapter
 from rpckit.codec import RpcCodec
 from rpckit.envelopes import (
+    RpcErrorData,
     RpcFailure,
     RpcNotification,
     RpcRequestEnvelope,
@@ -16,6 +17,7 @@ from rpckit.envelopes import (
 from rpckit.errors import RpcError, RpcInvalidParamsError
 from rpckit.observer import RpcObserverLike, notify_observer
 from rpckit.protocol import RpcSubscriptionDefinition
+from rpckit.server import RpcServer
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ class SubscriptionSession:
         send: Callable[[str], Awaitable[None]],
         *,
         limit: int,
+        server: RpcServer,
         observer: RpcObserverLike | None = None,
     ) -> None:
         self._definitions = {item.name: item for item in definitions}
@@ -40,12 +43,22 @@ class SubscriptionSession:
         self._send = send
         self._limit = limit
         self._observer = observer
+        self._server = server
         self._next_id = 1
         self._tasks: dict[str, tuple[str, asyncio.Task[None]]] = {}
         self._codec = RpcCodec()
 
     async def handle(self, request: RpcRequestEnvelope) -> None:
         if not request.expects_response:
+            return
+        if isinstance(request.params, list):
+            await self._respond(
+                request,
+                RpcFailure.from_error(
+                    request.id,
+                    RpcInvalidParamsError(message="Subscriptions require named params"),
+                ),
+            )
             return
         name = request.method
         if name.endswith(".subscribe"):
@@ -136,15 +149,24 @@ class SubscriptionSession:
             await self._terminal(definition.name, subscription_id, complete=True)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("RPC subscription %s failed", definition.name)
-            await self._terminal(definition.name, subscription_id, complete=False)
+        except Exception as error:
+            failure = self._server.failure(
+                None, error, method=definition.name, declared=definition.raises
+            )
+            await self._terminal(
+                definition.name, subscription_id, complete=False, error=failure.error
+            )
         finally:
             if generator is not None:
                 await generator.aclose()
 
     async def _terminal(
-        self, name: str, subscription_id: str, *, complete: bool
+        self,
+        name: str,
+        subscription_id: str,
+        *,
+        complete: bool,
+        error: RpcErrorData | None = None,
     ) -> None:
         await self._send_notification(
             name,
@@ -154,7 +176,15 @@ class SubscriptionSession:
                     params={
                         "subscriptionId": subscription_id,
                         "complete": complete,
-                        **({} if complete else {"error": "Subscription failed"}),
+                        **(
+                            {}
+                            if error is None
+                            else {
+                                "error": error.model_dump(
+                                    mode="json", exclude_none=True
+                                )
+                            }
+                        ),
                     },
                 )
             ),

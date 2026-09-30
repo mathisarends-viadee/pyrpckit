@@ -8,7 +8,8 @@
     method={{ event.rpc_name | literal }},
     message_adapter=TypeAdapter({{ event.message | annotation }}),
     payload_adapter=TypeAdapter({{ event.payload | annotation }}),
-{% if event.server is not none %}    server={{ event.server | literal }},
+{% if event.errors %}    error_mapper=error_from_response,
+{% endif %}{% if event.server is not none %}    server={{ event.server | literal }},
 {% endif %})
 {% if not loop.last %}
 {% endif %}{% endfor %}
